@@ -174,10 +174,12 @@ class TranscriptionServer:
         self.single_model = False
         self.batch_config = None
         self.raw_pcm_input = False
+        self.on_statement_finalized = None
 
     def initialize_client(
         self, websocket, options, faster_whisper_custom_model_path,
         whisper_tensorrt_path, trt_multilingual, trt_py_session=False,
+        on_statement_finalized=None,
     ):
         client: Optional[ServeClientBase] = None
 
@@ -226,6 +228,7 @@ class TranscriptionServer:
                     no_speech_thresh=options.get("no_speech_thresh", 0.45),
                     clip_audio=options.get("clip_audio", False),
                     same_output_threshold=options.get("same_output_threshold", 10),
+                    on_statement_finalized=on_statement_finalized,
                 )
                 logging.info("Running TensorRT backend.")
             except Exception as e:
@@ -253,6 +256,7 @@ class TranscriptionServer:
                     no_speech_thresh=options.get("no_speech_thresh", 0.45),
                     clip_audio=options.get("clip_audio", False),
                     same_output_threshold=options.get("same_output_threshold", 10),
+                    on_statement_finalized=on_statement_finalized,
                 )
                 logging.info("Running OpenVINO backend.")
             except Exception as e:
@@ -288,7 +292,8 @@ class TranscriptionServer:
                     clip_audio=options.get("clip_audio", False),
                     same_output_threshold=options.get("same_output_threshold", 10),
                     cache_path=self.cache_path,
-                    translation_queue=translation_queue
+                    translation_queue=translation_queue,
+                    on_statement_finalized=on_statement_finalized,
                 )
 
                 logging.info("Running faster_whisper backend.")
@@ -349,8 +354,11 @@ class TranscriptionServer:
 
             if self.backend.is_tensorrt():
                 self.vad_detector = VoiceActivityDetector(frame_rate=self.RATE)
-            self.initialize_client(websocket, options, faster_whisper_custom_model_path,
-                                   whisper_tensorrt_path, trt_multilingual, trt_py_session=trt_py_session)
+            self.initialize_client(
+                websocket, options, faster_whisper_custom_model_path,
+                whisper_tensorrt_path, trt_multilingual, trt_py_session=trt_py_session,
+                on_statement_finalized=self.on_statement_finalized
+            )
             return True
         except json.JSONDecodeError:
             logging.error("Failed to decode JSON from client")
@@ -449,7 +457,8 @@ class TranscriptionServer:
             batch_enabled=False,
             batch_max_size=8,
             batch_window_ms=50,
-            raw_pcm_input=False):
+            raw_pcm_input=False,
+            on_statement_finalized=None):
         """
         Run the transcription server.
 
@@ -468,6 +477,7 @@ class TranscriptionServer:
         """
         self.cache_path = cache_path
         self.raw_pcm_input = raw_pcm_input
+        self.on_statement_finalized = on_statement_finalized
         self.client_manager = ClientManager(max_clients, max_connection_time)
         if faster_whisper_custom_model_path is not None and not os.path.exists(faster_whisper_custom_model_path):
             if "/" not in faster_whisper_custom_model_path:

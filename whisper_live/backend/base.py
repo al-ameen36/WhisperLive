@@ -33,6 +33,7 @@ class ServeClientBase(object):
         clip_audio=False,
         same_output_threshold=10,
         translation_queue=None,
+        on_statement_finalized=None,
     ):
         self.client_uid = client_uid
         self.websocket = websocket
@@ -53,6 +54,7 @@ class ServeClientBase(object):
         self.transcript = []
         self.end_time_for_same_output = None
         self.translation_queue = translation_queue
+        self.on_statement_finalized = on_statement_finalized
 
         # threading
         self.lock = threading.Lock()
@@ -318,6 +320,10 @@ class ServeClientBase(object):
                         self.translation_queue.put(completed_segment.copy(), timeout=0.1)
                     except queue.Full:
                         logging.warning("Translation queue is full, skipping segment")
+
+                if self.on_statement_finalized:
+                    self.on_statement_finalized(completed_segment)
+
                 offset = min(duration, self.get_segment_end(s))
 
         # Process the last segment if its no_speech_prob is acceptable.
@@ -363,6 +369,9 @@ class ServeClientBase(object):
                             self.translation_queue.put(completed_segment.copy(), timeout=0.1)
                         except queue.Full:
                             logging.warning("Translation queue is full, skipping segment")
+
+                    if self.on_statement_finalized:
+                        self.on_statement_finalized(completed_segment)
 
             self.current_out = ''
             offset = min(duration, self.end_time_for_same_output)

@@ -34,6 +34,7 @@ class ServeClientFasterWhisper(ServeClientBase):
         same_output_threshold=7,
         cache_path="~/.cache/whisper-live/",
         translation_queue=None,
+        on_statement_finalized=None,
     ):
         """
         Initialize a ServeClient instance.
@@ -63,7 +64,8 @@ class ServeClientFasterWhisper(ServeClientBase):
             no_speech_thresh,
             clip_audio,
             same_output_threshold,
-            translation_queue
+            translation_queue,
+            on_statement_finalized
         )
         self.cache_path = cache_path
         self.model_sizes = [
