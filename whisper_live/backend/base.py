@@ -322,7 +322,7 @@ class ServeClientBase(object):
                         logging.warning("Translation queue is full, skipping segment")
 
                 if self.on_statement_finalized:
-                    self.on_statement_finalized(completed_segment)
+                    threading.Thread(target=self.on_statement_finalized, args=(completed_segment,), daemon=True).start()
 
                 offset = min(duration, self.get_segment_end(s))
 
@@ -371,7 +371,7 @@ class ServeClientBase(object):
                             logging.warning("Translation queue is full, skipping segment")
 
                     if self.on_statement_finalized:
-                        self.on_statement_finalized(completed_segment)
+                        threading.Thread(target=self.on_statement_finalized, args=(completed_segment,), daemon=True).start()
 
             self.current_out = ''
             offset = min(duration, self.end_time_for_same_output)
