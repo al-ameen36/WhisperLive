@@ -1,106 +1,86 @@
 import argparse
 import os
-import threading
 import logging
-from fastapi import FastAPI
-from fastapi import UploadFile, Form
-import uvicorn
-import tempfile
-import shutil
-import json
-from starlette.responses import PlainTextResponse, JSONResponse
+
+logging.basicConfig(level=logging.INFO)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--port', '-p',
-                        type=int,
-                        default=9090,
+    parser = argparse.ArgumentParser(description="WhisperLive Transcription Server")
+
+    # Network
+    parser.add_argument('--port', '-p', type=int, default=9090,
                         help="Websocket port to run the server on.")
-    parser.add_argument('--backend', '-b',
-                        type=str,
-                        default='faster_whisper',
-                        help='Backends from ["tensorrt", "faster_whisper", "openvino"]')
-    parser.add_argument('--faster_whisper_custom_model_path', '-fw',
-                        type=str, default=None,
-                        help="Custom Faster Whisper Model")
-    parser.add_argument('--trt_model_path', '-trt',
-                        type=str,
-                        default=None,
-                        help='Whisper TensorRT model path')
-    parser.add_argument('--trt_multilingual', '-m',
-                        action="store_true",
-                        help='Boolean only for TensorRT model. True if multilingual.')
-    parser.add_argument('--trt_py_session',
-                        action="store_true",
-                        help='Boolean only for TensorRT model. Use python session or cpp session, By default uses Cpp.')
-    parser.add_argument('--omp_num_threads', '-omp',
-                        type=int,
-                        default=1,
-                        help="Number of threads to use for OpenMP")
-    parser.add_argument('--no_single_model', '-nsm',
-                        action='store_true',
-                        help='Set this if every connection should instantiate its own model. Only relevant for custom model, passed using -trt or -fw.')
-    parser.add_argument('--max_clients',
-                        type=int,
-                        default=4,
-                        help='Maximum clients supported by the server.')
-    parser.add_argument('--max_connection_time',
-                        type=int,
-                        default=300,
-                        help='The maximum duration (in seconds) a client can stay connected. Defaults to 300 seconds (5 minutes)')
-    parser.add_argument('--cache_path', '-c',
-                        type=str,
-                        default="~/.cache/whisper-live/",
-                        help='Path to cache the converted ctranslate2 models.')
-    parser.add_argument(
-        "--rest_port", type=int, default=8000, help="Port for the REST API server."
-    )
-    parser.add_argument(
-        "--enable_rest",
-        action="store_true",
-        help="Enable the OpenAI-compatible REST API endpoint.",
-    )
-    parser.add_argument(
-        '--cors-origins',
-        type=str,
-        default=None,
-        help="Comma-separated list of allowed CORS origins (e.g., 'http://localhost:3000,http://example.com'). Defaults to localhost/127.0.0.1 on the WebSocket port."
-    )
-    parser.add_argument(
-        '--batch_inference',
-        action='store_true',
-        help='Enable batched GPU inference for concurrent sessions. '
-             'Batches multiple sessions into a single GPU call for higher throughput.'
-    )
-    parser.add_argument(
-        '--batch_max_size',
-        type=int,
-        default=8,
-        help='Maximum batch size for batched inference (default: 8).'
-    )
-    parser.add_argument(
-        '--batch_window_ms',
-        type=int,
-        default=50,
-        help='Maximum time in ms to wait for batch to fill (default: 50).'
-    )
-    parser.add_argument(
-        '--raw_pcm_input',
-        action='store_true',
-        help='Expect raw PCM int16 audio from clients instead of float32. '
-             'Audio will be normalized to float32 range [-1.0, 1.0].'
-    )
+    parser.add_argument('--cors-origins', type=str, default=None,
+                        help="Comma-separated list of allowed CORS origins. "
+                             "Defaults to localhost/127.0.0.1 on the WebSocket port.")
+
+    # Backend
+    parser.add_argument('--backend', '-b', type=str, default='faster_whisper',
+                        help='Backend to use: ["tensorrt", "faster_whisper", "openvino"]')
+    parser.add_argument('--faster_whisper_custom_model_path', '-fw', type=str, default=None,
+                        help="Path to a custom Faster Whisper model.")
+    parser.add_argument('--trt_model_path', '-trt', type=str, default=None,
+                        help='Whisper TensorRT model path.')
+    parser.add_argument('--trt_multilingual', '-m', action='store_true',
+                        help='TensorRT only: set if model is multilingual.')
+    parser.add_argument('--trt_py_session', action='store_true',
+                        help='TensorRT only: use Python session instead of C++ session.')
+    parser.add_argument('--cache_path', '-c', type=str, default="~/.cache/whisper-live/",
+                        help='Path to cache converted ctranslate2 models.')
+
+    # Client limits
+    parser.add_argument('--max_clients', type=int, default=4,
+                        help='Maximum number of simultaneous clients.')
+    parser.add_argument('--max_connection_time', type=int, default=300,
+                        help='Max duration (seconds) a client can stay connected.')
+    parser.add_argument('--no_single_model', '-nsm', action='store_true',
+                        help='Each connection instantiates its own model (only for custom model paths).')
+
+    # VAD
+    parser.add_argument('--no_vad', action='store_true',
+                        help='Disable Voice Activity Detection (VAD). VAD is enabled by default.')
+
+    # Audio input
+    parser.add_argument('--raw_pcm_input', action='store_true',
+                        help='Expect raw PCM int16 audio from clients instead of float32.')
+
+    # Batch inference
+    parser.add_argument('--batch_inference', action='store_true',
+                        help='Enable batched GPU inference for concurrent sessions.')
+    parser.add_argument('--batch_max_size', type=int, default=8,
+                        help='Maximum batch size for batched inference (default: 8).')
+    parser.add_argument('--batch_window_ms', type=int, default=50,
+                        help='Max time (ms) to wait for a batch to fill (default: 50).')
+
+    # REST API
+    parser.add_argument('--enable_rest', action='store_true',
+                        help='Enable the OpenAI-compatible REST API endpoint.')
+    parser.add_argument('--rest_port', type=int, default=8000,
+                        help='Port for the REST API server.')
+
+    # Performance
+    parser.add_argument('--omp_num_threads', '-omp', type=int, default=1,
+                        help="Number of threads to use for OpenMP.")
+
     args = parser.parse_args()
 
-    if args.backend == "tensorrt":
-        if args.trt_model_path is None:
-            raise ValueError("Please Provide a valid tensorrt model path")
+    # ── Validation ────────────────────────────────────────────────────────────
+    if args.backend == "tensorrt" and args.trt_model_path is None:
+        raise ValueError("Please provide a valid TensorRT model path via --trt_model_path.")
 
+    # ── Environment ───────────────────────────────────────────────────────────
     if "OMP_NUM_THREADS" not in os.environ:
         os.environ["OMP_NUM_THREADS"] = str(args.omp_num_threads)
 
+    if not os.environ.get("HF_TOKEN"):
+        logging.warning("HF_TOKEN is not set — gated HuggingFace models will be unavailable.")
+
+
+    # ── Server ────────────────────────────────────────────────────────────────
     from whisper_live.server import TranscriptionServer
+
     server = TranscriptionServer()
+
     server.run(
         "0.0.0.0",
         port=args.port,
@@ -120,4 +100,5 @@ if __name__ == "__main__":
         batch_max_size=args.batch_max_size,
         batch_window_ms=args.batch_window_ms,
         raw_pcm_input=args.raw_pcm_input,
+        use_vad=not args.no_vad,
     )
