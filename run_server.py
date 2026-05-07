@@ -76,6 +76,12 @@ if __name__ == "__main__":
         logging.warning("HF_TOKEN is not set — gated HuggingFace models will be unavailable.")
 
 
+    # ── Ngrok ─────────────────────────────────────────────────────────────────
+    from pyngrok import ngrok as pyngrok
+    pyngrok.set_auth_token(os.environ.get("NGROK_AUTHTOKEN"))
+    tunnel = pyngrok.connect(args.port, proto="http", hostname="artistic-preferably-sole.ngrok-free.app")
+    logging.info(f"Ngrok tunnel: {tunnel.public_url}")
+
     # ── Server ────────────────────────────────────────────────────────────────
     from whisper_live.server import TranscriptionServer
 

@@ -22,6 +22,7 @@ openvino-tokenizers
 optimum 
 optimum-intel
 
-fastapi
+"fastapi[standard]"
 uvicorn
 python-multipart
+pyngrok
