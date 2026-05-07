@@ -16,7 +16,7 @@ if __name__ == "__main__":
 
     # Backend
     parser.add_argument('--backend', '-b', type=str, default='faster_whisper',
-                        help='Backend to use: ["tensorrt", "faster_whisper", "openvino"]')
+                        help='Backend to use: ["tensorrt", "faster_whisper", "openvino", "whisper"]')
     parser.add_argument('--faster_whisper_custom_model_path', '-fw', type=str, default=None,
                         help="Path to a custom Faster Whisper model.")
     parser.add_argument('--trt_model_path', '-trt', type=str, default=None,
