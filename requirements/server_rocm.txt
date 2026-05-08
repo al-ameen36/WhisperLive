@@ -1,6 +1,6 @@
 openai-whisper
 websockets
-onnxruntime
+onnxruntime-rocm
 numba
 kaldialign
 soundfile
