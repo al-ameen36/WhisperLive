@@ -15,25 +15,42 @@ def call_llm_async(
 ):
     def run():
         conn = None
+        memory_snapshot = existing_memory or []
 
         try:
-            existing_memory = existing_memory or []
+            new_text_clean = (new_text or "").strip()
 
-            # ---- compact context (avoid token bloat) ----
-            context_text = "\n".join(f"- {s.get('text', '')}" for s in context)
+            if len(new_text_clean) < 120:
+                return
 
-            memory_text = json.dumps(existing_memory)
+            if new_text_clean.count("...") > 2:
+                return
+
+            filler_words = ["um", "uh", "yeah", "right", "mmm"]
+            if len(new_text_clean) < 200 and all(
+                w in new_text_clean.lower() for w in filler_words
+            ):
+                return
+
+            context_text = "\n".join(
+                f"- {s.get('text', '')}" for s in context if s and s.get("text")
+            )
+
+            memory_text = "\n".join(
+                f"- {item.get('type', '')}: {item.get('items', [])}"
+                for item in memory_snapshot
+            )
 
             prompt = f"""
-You are maintaining LIVE STRUCTURED STATE of a meeting.
+You are a strict meeting state extractor.
 
-CRITICAL RULE:
-You are NOT a summarizer.
-You are a state updater.
+Only extract explicit, complete, and meaningful information.
 
-Only extract NEW information that is NOT already present in EXISTING MEMORY.
+If uncertain, return no new data.
 
-If nothing new exists, return:
+Return JSON only.
+
+EMPTY FORMAT:
 {{
   "type": "meeting_update",
   "summary": "",
@@ -42,28 +59,14 @@ If nothing new exists, return:
   "data": []
 }}
 
-VALID DATA TYPES:
-- decision
-- action_item
-- question
-- important_point
-- risk
-- follow_up
-
-OUTPUT RULES:
-- STRICT JSON ONLY
-- NO markdown
-- NO explanations
-- NO extra text
-
-EXISTING MEMORY (already known facts):
+EXISTING MEMORY:
 {memory_text}
 
 RECENT CONTEXT:
 {context_text}
 
 NEW TRANSCRIPT:
-{new_text}
+{new_text_clean}
 """
 
             payload = {
@@ -71,7 +74,7 @@ NEW TRANSCRIPT:
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You output ONLY valid JSON meeting updates.",
+                        "content": "Return only valid JSON.",
                     },
                     {
                         "role": "user",
@@ -79,7 +82,7 @@ NEW TRANSCRIPT:
                     },
                 ],
                 "stream": False,
-                "temperature": 0.2,
+                "temperature": 0.1,
                 "response_format": {"type": "json_object"},
             }
 
@@ -95,14 +98,10 @@ NEW TRANSCRIPT:
             response = conn.getresponse()
 
             if response.status != 200:
-                error_body = response.read().decode()
-                logging.error(
-                    f"LLM request failed (status={response.status}): {error_body}"
-                )
+                logging.error(response.read().decode())
                 return
 
             raw = response.read().decode()
-
             data = json.loads(raw)
 
             output = data["choices"][0]["message"]["content"].strip()
@@ -110,18 +109,14 @@ NEW TRANSCRIPT:
             try:
                 parsed = json.loads(output)
             except Exception:
-                logging.error(f"Invalid JSON returned by LLM:\n{output}")
+                logging.error(f"Invalid JSON:\n{output}")
                 return
 
-            # ---- suppress empty updates ----
-            if not parsed.get("has_new_data", False):
+            if not parsed.get("has_new_data"):
                 return
 
-            logging.info(
-                "\n================ LLM RESPONSE ================\n"
-                f"{json.dumps(parsed, indent=2)}\n"
-                "=============================================="
-            )
+            if not parsed.get("data"):
+                return
 
             if callback:
                 callback(parsed)
