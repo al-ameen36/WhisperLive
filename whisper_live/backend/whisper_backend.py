@@ -19,7 +19,7 @@ class ServeClientWhisper(ServeClientBase):
         device=None,
         language=None,
         client_uid=None,
-        model="small",
+        model="large",
         initial_prompt=None,
         vad_parameters=None,
         use_vad=True,
@@ -43,7 +43,7 @@ class ServeClientWhisper(ServeClientBase):
             clip_audio,
             same_output_threshold,
             translation_queue,
-            on_statement_finalized
+            on_statement_finalized,
         )
         self.model_size_or_path = model
         self.language = "en" if self.model_size_or_path.endswith(".en") else language
@@ -67,11 +67,15 @@ class ServeClientWhisper(ServeClientBase):
                 self.create_model(device)
         except Exception as e:
             logging.error(f"Failed to load model: {e}")
-            self.websocket.send(json.dumps({
-                "uid": self.client_uid,
-                "status": "ERROR",
-                "message": f"Failed to load model: {str(self.model_size_or_path)}"
-            }))
+            self.websocket.send(
+                json.dumps(
+                    {
+                        "uid": self.client_uid,
+                        "status": "ERROR",
+                        "message": f"Failed to load model: {str(self.model_size_or_path)}",
+                    }
+                )
+            )
             self.websocket.close()
             return
 
@@ -83,7 +87,7 @@ class ServeClientWhisper(ServeClientBase):
                 {
                     "uid": self.client_uid,
                     "message": self.SERVER_READY,
-                    "backend": "whisper"
+                    "backend": "whisper",
                 }
             )
         )
@@ -106,7 +110,7 @@ class ServeClientWhisper(ServeClientBase):
                     initial_prompt=self.initial_prompt,
                     language=self.language,
                     task=self.task,
-                    fp16=torch.cuda.is_available()
+                    fp16=torch.cuda.is_available(),
                 )
         else:
             result = self.transcriber.transcribe(
@@ -114,20 +118,19 @@ class ServeClientWhisper(ServeClientBase):
                 initial_prompt=self.initial_prompt,
                 language=self.language,
                 task=self.task,
-                fp16=torch.cuda.is_available()
+                fp16=torch.cuda.is_available(),
             )
 
         if self.language is None and result.get("language"):
             self.language = result["language"]
-            self.websocket.send(json.dumps({
-                "uid": self.client_uid,
-                "language": self.language
-            }))
+            self.websocket.send(
+                json.dumps({"uid": self.client_uid, "language": self.language})
+            )
 
         # OpenAI Whisper returns a dict with 'segments'
         # We need to adapt these to the format expected by update_segments
         # base.py expects objects with .text, .start, .end, .no_speech_prob
-        
+
         class SegmentWrapper:
             def __init__(self, s):
                 self.text = s.get("text", "")
