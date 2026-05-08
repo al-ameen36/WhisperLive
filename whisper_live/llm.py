@@ -24,12 +24,7 @@ def call_llm_async(
                 logging.warning("[LLM] empty context, skipping")
                 return
 
-            memory_text = "\n".join(
-                f"- [{item.get('type', '')}] {item.get('summary', '')} | "
-                f"topics: {item.get('topics', [])} | "
-                f"action_items: {item.get('action_items', [])}"
-                for item in (existing_memory or [])
-            )
+            memory_text = json.dumps(existing_memory or [], indent=2)
 
             prompt = f"""
 You are a strict meeting state extractor.
