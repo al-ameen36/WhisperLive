@@ -1,53 +1,29 @@
-import threading
 import http.client
 import json
 import logging
+import threading
 
 
-def call_llm_async(
-    host,
-    port,
-    model,
-    context,
-    new_text,
-    existing_memory=None,
-    callback=None,
-):
+def call_llm_async(host, port, model, context, existing_memory=None, callback=None):
     def run():
         conn = None
-        memory_snapshot = existing_memory or []
-
         try:
-            new_text_clean = (new_text or "").strip()
-
-            if len(new_text_clean) < 120:
-                return
-
-            if new_text_clean.count("...") > 2:
-                return
-
-            filler_words = ["um", "uh", "yeah", "right", "mmm"]
-            if len(new_text_clean) < 200 and all(
-                w in new_text_clean.lower() for w in filler_words
-            ):
-                return
-
             context_text = "\n".join(
                 f"- {s.get('text', '')}" for s in context if s and s.get("text")
             )
-
             memory_text = "\n".join(
                 f"- {item.get('type', '')}: {item.get('items', [])}"
-                for item in memory_snapshot
+                for item in (existing_memory or [])
             )
+
+            if not context_text.strip():
+                logging.warning("[LLM] empty context, skipping")
+                return
 
             prompt = f"""
 You are a strict meeting state extractor.
-
 Only extract explicit, complete, and meaningful information.
-
 If uncertain, return no new data.
-
 Return JSON only.
 
 EMPTY FORMAT:
@@ -62,24 +38,15 @@ EMPTY FORMAT:
 EXISTING MEMORY:
 {memory_text}
 
-RECENT CONTEXT:
+RECENT TRANSCRIPT:
 {context_text}
-
-NEW TRANSCRIPT:
-{new_text_clean}
 """
 
             payload = {
                 "model": model,
                 "messages": [
-                    {
-                        "role": "system",
-                        "content": "Return only valid JSON.",
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    },
+                    {"role": "system", "content": "Return only valid JSON."},
+                    {"role": "user", "content": prompt},
                 ],
                 "stream": False,
                 "temperature": 0.1,
@@ -87,7 +54,6 @@ NEW TRANSCRIPT:
             }
 
             conn = http.client.HTTPConnection(host, int(port), timeout=20)
-
             conn.request(
                 "POST",
                 "/v1/chat/completions",
@@ -96,34 +62,28 @@ NEW TRANSCRIPT:
             )
 
             response = conn.getresponse()
-
             if response.status != 200:
-                logging.error(response.read().decode())
+                logging.error(
+                    f"[LLM] bad status {response.status}: {response.read().decode()}"
+                )
                 return
 
-            raw = response.read().decode()
-            data = json.loads(raw)
-
+            data = json.loads(response.read().decode())
             output = data["choices"][0]["message"]["content"].strip()
 
             try:
                 parsed = json.loads(output)
             except Exception:
-                logging.error(f"Invalid JSON:\n{output}")
+                logging.error(f"[LLM] invalid JSON response:\n{output}")
                 return
 
-            if not parsed.get("has_new_data"):
-                return
+            logging.info(f"[LLM] response:\n{json.dumps(parsed, indent=2)}")
 
-            if not parsed.get("data"):
-                return
-
-            if callback:
+            if callback and parsed.get("has_new_data"):
                 callback(parsed)
 
         except Exception as e:
-            logging.exception(f"LLM async call failed: {e}")
-
+            logging.exception(f"[LLM] call failed: {e}")
         finally:
             if conn:
                 conn.close()
