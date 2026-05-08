@@ -12,7 +12,6 @@ from fastapi import FastAPI, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import PlainTextResponse, JSONResponse
 import uvicorn
-from faster_whisper import WhisperModel
 import torch
 
 from enum import Enum
@@ -295,7 +294,16 @@ class TranscriptionServer:
                 logging.info("Running whisper backend.")
 
             if self.backend.is_faster_whisper():
-                from whisper_live.backend.faster_whisper_backend import ServeClientFasterWhisper
+                try:
+                    from whisper_live.backend.faster_whisper_backend import ServeClientFasterWhisper
+                except ImportError:
+                    logging.error("faster-whisper is not installed. Please install it to use this backend.")
+                    websocket.send(json.dumps({
+                        "uid": options["uid"],
+                        "status": "ERROR",
+                        "message": "faster-whisper is not installed on the server."
+                    }))
+                    return
                 # model is of the form namespace/repo_name and not a filesystem path
                 if faster_whisper_custom_model_path is not None:
                     logging.info(f"Using custom model {faster_whisper_custom_model_path}")
@@ -582,6 +590,10 @@ class TranscriptionServer:
                     device = "cuda" if torch.cuda.is_available() else "cpu"
                     compute_type = "float16" if device == "cuda" else "int8"
 
+                    try:
+                        from faster_whisper import WhisperModel
+                    except ImportError:
+                        return JSONResponse({"error": "faster-whisper is not installed. Please install it to use this endpoint."}, status_code=500)
                     transcriber = WhisperModel(model_name, device=device, compute_type=compute_type)
                     segments, info = transcriber.transcribe(
                         tmp_path,

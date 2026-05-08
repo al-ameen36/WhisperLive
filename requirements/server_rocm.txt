@@ -1,0 +1,26 @@
+openai-whisper
+websockets
+onnxruntime
+numba
+kaldialign
+soundfile
+scipy
+av
+jiwer
+evaluate
+numpy
+tokenizers
+sentencepiece
+
+# openvino
+librosa
+openvino
+openvino-genai
+openvino-tokenizers
+optimum 
+optimum-intel
+
+"fastapi[standard]"
+uvicorn
+python-multipart
+pyngrok

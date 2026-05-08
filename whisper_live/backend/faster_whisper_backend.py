@@ -4,10 +4,8 @@ import logging
 import threading
 import time
 import torch
-import ctranslate2
 from huggingface_hub import snapshot_download
 
-from whisper_live.transcriber.transcriber_faster_whisper import WhisperModel
 from whisper_live.backend.base import ServeClientBase
 
 
@@ -166,6 +164,7 @@ class ServeClientFasterWhisper(ServeClientBase):
                     model_to_load = ct2_dir
 
         logging.info(f"Loading model: {model_to_load}")
+        from whisper_live.transcriber.transcriber_faster_whisper import WhisperModel
         self.transcriber = WhisperModel(
             model_to_load,
             device=device,

@@ -32,21 +32,6 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from faster_whisper.audio import pad_or_trim
-from faster_whisper.tokenizer import Tokenizer
-from faster_whisper.vad import (
-    VadOptions,
-    collect_chunks,
-    get_speech_timestamps,
-)
-
-from whisper_live.transcriber.transcriber_faster_whisper import (
-    Segment,
-    TranscriptionInfo,
-    get_compression_ratio,
-    get_suppressed_tokens,
-)
-
 
 @dataclass
 class BatchRequest:
@@ -204,6 +189,7 @@ class BatchInferenceWorker:
         window, ensuring identical behavior to the non-batched code path.
         """
         try:
+            from whisper_live.transcriber.transcriber_faster_whisper import Segment
             result, info = self.transcriber.transcribe(
                 req.audio,
                 language=req.language,
@@ -231,6 +217,7 @@ class BatchInferenceWorker:
             5. Per-item segment parsing and result dispatch
         """
         # Step 1: Per-item CPU preprocessing (VAD + feature extraction)
+        from faster_whisper.vad import VadOptions, get_speech_timestamps, collect_chunks
         preprocessed = []
         for req in batch:
             try:
@@ -265,6 +252,15 @@ class BatchInferenceWorker:
 
         try:
             # Step 2: Batch GPU encode
+            from faster_whisper.audio import pad_or_trim
+            from faster_whisper.tokenizer import Tokenizer
+            from whisper_live.transcriber.transcriber_faster_whisper import (
+                Segment,
+                get_compression_ratio,
+                get_suppressed_tokens,
+                TranscriptionInfo,
+            )
+
             feature_batch = np.stack([p[1] for p in preprocessed])  # [B, n_mels, 3000]
             encoder_output = self.transcriber.encode(feature_batch)
 
@@ -386,6 +382,7 @@ class BatchInferenceWorker:
 
     def _make_info(self, req, duration, duration_after_vad, language=None):
         """Build a ``TranscriptionInfo`` for the given request."""
+        from whisper_live.transcriber.transcriber_faster_whisper import TranscriptionInfo
         return TranscriptionInfo(
             language=language or req.language or "en",
             language_probability=1.0,
