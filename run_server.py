@@ -33,7 +33,7 @@ if __name__ == "__main__":
         "--backend",
         "-b",
         type=str,
-        default="faster_whisper",
+        default="whisper",
         help='Backend to use: ["tensorrt", "faster_whisper", "openvino", "whisper"]',
     )
     parser.add_argument(
