@@ -7,7 +7,12 @@ class MeetingSession:
     def __init__(self):
         self.transcript = []
         self.context = deque(maxlen=50)
+
+        # Stores structured LLM outputs
+        self.insights = []
+
         self.subscribers = set()
+
         self.lock = threading.Lock()
 
 
@@ -23,19 +28,53 @@ class MemoryStore:
             session.transcript.append(segment)
             session.context.append(segment)
 
-        self.broadcast(session, segment)
+        self.broadcast_transcript(session, segment)
+
+    def add_insight(self, meeting_id, insight):
+        session = self.sessions[meeting_id]
+
+        with session.lock:
+            session.insights.append(insight)
+
+        self.broadcast_insight(session, insight)
 
     def get_context(self, meeting_id, n=20):
         session = self.sessions[meeting_id]
+
         return list(session.context)[-n:]
 
-    def broadcast(self, session, segment):
-        msg = json.dumps({"type": "transcript_update", "segment": segment})
+    def get_recent_insights(self, meeting_id, n=10):
+        session = self.sessions[meeting_id]
 
+        return session.insights[-n:]
+
+    def broadcast_transcript(self, session, segment):
+        msg = json.dumps(
+            {
+                "type": "transcript_update",
+                "segment": segment,
+            }
+        )
+
+        self._broadcast(session, msg)
+
+    def broadcast_insight(self, session, insight):
+        msg = json.dumps(
+            {
+                "type": "insight_update",
+                "insight": insight,
+            }
+        )
+
+        self._broadcast(session, msg)
+
+    def _broadcast(self, session, msg):
         dead = []
+
         for ws in session.subscribers:
             try:
                 ws.send(msg)
+
             except Exception:
                 dead.append(ws)
 

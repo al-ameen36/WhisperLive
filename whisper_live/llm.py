@@ -10,27 +10,56 @@ def call_llm_async(
     model,
     context,
     new_text,
+    existing_memory=None,
     callback=None,
 ):
     def run():
         conn = None
 
         try:
-            context_text = "\n".join([f"- {segment['text']}" for segment in context])
+            existing_memory = existing_memory or []
+
+            # ---- compact context (avoid token bloat) ----
+            context_text = "\n".join(f"- {s.get('text', '')}" for s in context)
+
+            memory_text = json.dumps(existing_memory)
 
             prompt = f"""
-You are monitoring a live meeting transcript.
+You are maintaining LIVE STRUCTURED STATE of a meeting.
 
-Your responsibilities:
-- maintain awareness of the conversation
-- identify important discussion points
-- identify decisions
-- identify action items
-- produce concise realtime updates
+CRITICAL RULE:
+You are NOT a summarizer.
+You are a state updater.
 
-Keep responses short and useful.
+Only extract NEW information that is NOT already present in EXISTING MEMORY.
 
-MEETING CONTEXT:
+If nothing new exists, return:
+{{
+  "type": "meeting_update",
+  "summary": "",
+  "has_new_data": false,
+  "topics": [],
+  "data": []
+}}
+
+VALID DATA TYPES:
+- decision
+- action_item
+- question
+- important_point
+- risk
+- follow_up
+
+OUTPUT RULES:
+- STRICT JSON ONLY
+- NO markdown
+- NO explanations
+- NO extra text
+
+EXISTING MEMORY (already known facts):
+{memory_text}
+
+RECENT CONTEXT:
 {context_text}
 
 NEW TRANSCRIPT:
@@ -42,10 +71,7 @@ NEW TRANSCRIPT:
                 "messages": [
                     {
                         "role": "system",
-                        "content": (
-                            "You are an AI assistant helping users stay "
-                            "synchronized during live meetings."
-                        ),
+                        "content": "You output ONLY valid JSON meeting updates.",
                     },
                     {
                         "role": "user",
@@ -53,29 +79,23 @@ NEW TRANSCRIPT:
                     },
                 ],
                 "stream": False,
-                "temperature": 0.3,
+                "temperature": 0.2,
+                "response_format": {"type": "json_object"},
             }
 
-            conn = http.client.HTTPConnection(
-                host,
-                int(port),
-                timeout=20,
-            )
+            conn = http.client.HTTPConnection(host, int(port), timeout=20)
 
             conn.request(
                 "POST",
                 "/v1/chat/completions",
                 body=json.dumps(payload),
-                headers={
-                    "Content-Type": "application/json",
-                },
+                headers={"Content-Type": "application/json"},
             )
 
             response = conn.getresponse()
 
             if response.status != 200:
                 error_body = response.read().decode()
-
                 logging.error(
                     f"LLM request failed (status={response.status}): {error_body}"
                 )
@@ -87,15 +107,24 @@ NEW TRANSCRIPT:
 
             output = data["choices"][0]["message"]["content"].strip()
 
+            try:
+                parsed = json.loads(output)
+            except Exception:
+                logging.error(f"Invalid JSON returned by LLM:\n{output}")
+                return
+
+            # ---- suppress empty updates ----
+            if not parsed.get("has_new_data", False):
+                return
+
             logging.info(
-                "\n"
-                "================ LLM RESPONSE ================\n"
-                f"{output}\n"
+                "\n================ LLM RESPONSE ================\n"
+                f"{json.dumps(parsed, indent=2)}\n"
                 "=============================================="
             )
 
             if callback:
-                callback(output)
+                callback(parsed)
 
         except Exception as e:
             logging.exception(f"LLM async call failed: {e}")
@@ -104,7 +133,4 @@ NEW TRANSCRIPT:
             if conn:
                 conn.close()
 
-    threading.Thread(
-        target=run,
-        daemon=True,
-    ).start()
+    threading.Thread(target=run, daemon=True).start()

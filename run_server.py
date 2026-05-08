@@ -1,186 +1,17 @@
-import argparse
 import os
 import logging
 from pyngrok import ngrok as pyngrok
 from whisper_live.server import TranscriptionServer
 from whisper_live.memory import MemoryStore
 from whisper_live.llm import call_llm_async
+import time
+from collections import defaultdict
+from arguments import args
 
 
 logging.basicConfig(level=logging.INFO)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="WhisperLive Transcription Server")
-
-    # Network
-    parser.add_argument(
-        "--port",
-        "-p",
-        type=int,
-        default=9090,
-        help="Websocket port to run the server on.",
-    )
-    parser.add_argument(
-        "--cors-origins",
-        type=str,
-        default=None,
-        help="Comma-separated list of allowed CORS origins. "
-        "Defaults to localhost/127.0.0.1 on the WebSocket port.",
-    )
-
-    # Backend
-    parser.add_argument(
-        "--backend",
-        "-b",
-        type=str,
-        default="whisper",
-        help='Backend to use: ["tensorrt", "faster_whisper", "openvino", "whisper"]',
-    )
-    parser.add_argument(
-        "--faster_whisper_custom_model_path",
-        "-fw",
-        type=str,
-        default=None,
-        help="Path to a custom Faster Whisper model.",
-    )
-    parser.add_argument(
-        "--trt_model_path",
-        "-trt",
-        type=str,
-        default=None,
-        help="Whisper TensorRT model path.",
-    )
-    parser.add_argument(
-        "--trt_multilingual",
-        "-m",
-        action="store_true",
-        help="TensorRT only: set if model is multilingual.",
-    )
-    parser.add_argument(
-        "--trt_py_session",
-        action="store_true",
-        help="TensorRT only: use Python session instead of C++ session.",
-    )
-    parser.add_argument(
-        "--cache_path",
-        "-c",
-        type=str,
-        default="~/.cache/whisper-live/",
-        help="Path to cache converted ctranslate2 models.",
-    )
-
-    # Client limits
-    parser.add_argument(
-        "--max_clients",
-        type=int,
-        default=4,
-        help="Maximum number of simultaneous clients.",
-    )
-    parser.add_argument(
-        "--max_connection_time",
-        type=int,
-        default=86400,
-        help="Max duration (seconds) a client can stay connected.",
-    )
-    parser.add_argument(
-        "--no_single_model",
-        "-nsm",
-        action="store_true",
-        help="Each connection instantiates its own model (only for custom model paths).",
-    )
-
-    # VAD
-    parser.add_argument(
-        "--no_vad",
-        action="store_true",
-        help="Disable Voice Activity Detection (VAD). VAD is enabled by default.",
-    )
-
-    # Audio input
-    parser.add_argument(
-        "--raw_pcm_input",
-        action="store_true",
-        help="Expect raw PCM int16 audio from clients instead of float32.",
-    )
-
-    # Batch inference
-    parser.add_argument(
-        "--batch_inference",
-        action="store_true",
-        help="Enable batched GPU inference for concurrent sessions.",
-    )
-    parser.add_argument(
-        "--batch_max_size",
-        type=int,
-        default=8,
-        help="Maximum batch size for batched inference (default: 8).",
-    )
-    parser.add_argument(
-        "--batch_window_ms",
-        type=int,
-        default=50,
-        help="Max time (ms) to wait for a batch to fill (default: 50).",
-    )
-
-    # REST API
-    parser.add_argument(
-        "--enable_rest",
-        action="store_true",
-        help="Enable the OpenAI-compatible REST API endpoint.",
-    )
-    parser.add_argument(
-        "--rest_port", type=int, default=8000, help="Port for the REST API server."
-    )
-
-    # Performance
-    parser.add_argument(
-        "--omp_num_threads",
-        "-omp",
-        type=int,
-        default=1,
-        help="Number of threads to use for OpenMP.",
-    )
-
-    # LLM
-    parser.add_argument(
-        "--enable_llm",
-        action="store_true",
-        help="Enable LLM processing of finalized segments.",
-    )
-    parser.add_argument(
-        "--llm_host", type=str, default="localhost", help="LLM server host."
-    )
-    parser.add_argument("--llm_port", type=int, default=3000, help="LLM server port.")
-    parser.add_argument(
-        "--llm_buffer_size",
-        type=int,
-        default=3,
-        help="Number of segments to buffer before calling LLM.",
-    )
-    parser.add_argument(
-        "--llm_model",
-        type=str,
-        default="meta-llama/Meta-Llama-3-8B-Instruct",
-        help="Model name to use for the LLM call.",
-    )
-
-    args = parser.parse_args()
-
-    # ── Validation ────────────────────────────────────────────────────────────
-    if args.backend == "tensorrt" and args.trt_model_path is None:
-        raise ValueError(
-            "Please provide a valid TensorRT model path via --trt_model_path."
-        )
-
-    # ── Environment ───────────────────────────────────────────────────────────
-    if "OMP_NUM_THREADS" not in os.environ:
-        os.environ["OMP_NUM_THREADS"] = str(args.omp_num_threads)
-
-    if not os.environ.get("HF_TOKEN"):
-        logging.warning(
-            "HF_TOKEN is not set — gated HuggingFace models will be unavailable."
-        )
-
     # ── Ngrok ─────────────────────────────────────────────────────────────────
 
     pyngrok.set_auth_token(os.environ.get("NGROK_AUTHTOKEN"))
@@ -196,24 +27,90 @@ if __name__ == "__main__":
 
     # ── LLM Callback ────────────────────────────────────────────────────────
 
+    LLM_PORT = int(os.environ.get("LLM_PORT", "3000"))
+    LLM_HOST = os.environ.get("LLM_HOST", "localhost")
+    LLM_MODEL = os.environ.get("LLM_MODEL", "meta-llama/Meta-Llama-3-8B-Instruct")
+
+    LAST_LLM_CALL = defaultdict(lambda: 0)
+    PENDING_TEXT = defaultdict(list)
+
+    def should_trigger_llm(meeting_id, text):
+        now = time.time()
+        last = LAST_LLM_CALL[meeting_id]
+
+        # cooldown (prevents spam)
+        if now - last < 6:
+            return False
+
+        # strong signal: long speech chunk
+        if len(text) > 300:
+            return True
+
+        # strong signal: question detected
+        if "?" in text:
+            return True
+
+        # fallback: buffer-based trigger
+        if len(PENDING_TEXT[meeting_id]) >= args.llm_buffer_size:
+            return True
+
+        return False
+
+    def flush_pending(meeting_id):
+        text = " ".join(PENDING_TEXT[meeting_id]).strip()
+        PENDING_TEXT[meeting_id].clear()
+        return text
+
     def on_statement_finalized(segment, meeting_id):
         memory.add(meeting_id, segment)
 
         if not args.enable_llm:
             return
 
+        text = segment.get("text", "").strip()
+        if not text:
+            return
+
+        # accumulate streaming text
+        PENDING_TEXT[meeting_id].append(text)
+
+        combined_text = " ".join(PENDING_TEXT[meeting_id]).strip()
+
+        # decision gate (ALL logic centralized here)
+        if not should_trigger_llm(meeting_id, combined_text):
+            return
+
+        # flush only when actually triggering
+        context_text = flush_pending(meeting_id)
+
+        text = segment.get("text", "").strip()
+        if not text:
+            return
+
+        # accumulate streaming text
+        PENDING_TEXT[meeting_id].append(text)
+
+        combined_text = " ".join(PENDING_TEXT[meeting_id]).strip()
+
+        # decision gate (ALL logic centralized here)
+        if not should_trigger_llm(meeting_id, combined_text):
+            return
+
+        # flush only when actually triggering
+        context_text = flush_pending(meeting_id)
+
         context = memory.get_context(meeting_id, 20)
 
-        LLM_HOST = os.environ.get("LLM_HOST")
-        LLM_PORT = os.environ.get("LLM_PORT")
-        LLM_MODEL = os.environ.get("LLM_MODEL")
+        LAST_LLM_CALL[meeting_id] = time.time()
+        LAST_LLM_CALL[meeting_id] = time.time()
 
         call_llm_async(
             host=LLM_HOST,
             port=LLM_PORT,
             model=LLM_MODEL,
             context=context,
-            new_text=segment["text"],
+            new_text=context_text,
+            existing_memory=memory.get_recent_insights(meeting_id),
         )
 
     server.run(
