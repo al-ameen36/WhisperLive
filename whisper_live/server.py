@@ -181,6 +181,7 @@ class TranscriptionServer:
         whisper_tensorrt_path, trt_multilingual, trt_py_session=False,
         on_statement_finalized=None,
     ):
+        logging.info(f"Initializing client with callback: {on_statement_finalized is not None}")
         client: Optional[ServeClientBase] = None
 
         # Check if client wants translation
