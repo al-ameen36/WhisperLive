@@ -2,6 +2,7 @@ import http.client
 import json
 import logging
 import threading
+
 from typing import Callable, Optional, List, Dict, Any
 
 
@@ -13,37 +14,31 @@ def call_llm_async(
     existing_memory: Optional[List[Dict[str, Any]]] = None,
     callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ):
-    def fmt(ts: float) -> str:
-        ts = float(ts)
-        m = int(ts // 60)
-        s = int(ts % 60)
-        return f"{m:02d}:{s:02d}"
-
     def run():
         conn = None
+
         try:
             if not context:
-                logging.warning("[LLM] empty context, skipping")
                 return
 
             context_text = "\n".join(
-                f"- {s.get('text', '')}" for s in context if s and s.get("text")
+                (
+                    f"[{s.get('start_ts', 0):.2f} - "
+                    f"{s.get('end_ts', 0):.2f}] "
+                    f"{s.get('text', '')}"
+                )
+                for s in context
+                if s and s.get("text")
             )
 
             if not context_text.strip():
-                logging.warning("[LLM] empty context text, skipping")
+                logging.warning("[LLM] empty context")
                 return
 
             memory_text = json.dumps(existing_memory or [], indent=2)
 
-            # -----------------------------
-            # AUDIO TIME WINDOW
-            # -----------------------------
-            start_ts = context[0].get("start_ts", context[0].get("start", 0))
-            end_ts = context[-1].get("end_ts", context[-1].get("end", 0))
-
-            start_time = fmt(start_ts)
-            end_time = fmt(end_ts)
+            start_time = context[0].get("start_ts", 0)
+            end_time = context[-1].get("end_ts", 0)
 
             prompt = f"""
 You are a strict, high-precision meeting state extractor.
@@ -62,13 +57,13 @@ If nothing new or nothing meaningful is said, return ONLY:
 OUTPUT FORMAT (ONLY if new data exists)
 ----------------------------------------
 {{
-  "type": "..."  // set type as one of "decisions", "questions", "action_items", "risks", "followups", "general"
-  "summary": "2-3 sentences of concrete, factual content",
+  "type": one of: "decisions", "questions", "action_items", "risks", "followups", "general",
+  "summary": "2-3 sentences of concrete factual content",
   "has_new_data": true,
   "topics": [],
   "action_items": [],
-  "start_time": "{start_time}",
-  "end_time": "{end_time}"
+  "start_time": {start_time},
+  "end_time": {end_time}
 }}
 
 ----------------------------------------
@@ -82,67 +77,69 @@ Do NOT use phrases like:
 - "there is a conversation about"
 - "updates on"
 - "general discussion"
+
 Every sentence must contain concrete information.
 
 2. CONCRETE CONTENT REQUIREMENT
-Your summary MUST include at least one of:
-- a decision
-- a task
-- a named feature/product/topic
-- a measurable detail
-- a clear action or requirement
+Your summary MUST contain at least one:
+- decision
+- task
+- named feature
+- requirement
+- measurable detail
+- technical issue
 
-If you cannot extract at least ONE concrete fact → return has_new_data=false.
+3. NO MEMORY REPETITION
+Do NOT repeat or paraphrase information already present in EXISTING MEMORY.
 
-3. NO MEMORY REPEATING
-Do NOT restate anything already present in EXISTING MEMORY.
-Only extract NEW information that appears in RECENT TRANSCRIPT.
-
-4. MINIMUM INFORMATION THRESHOLD
-Only produce output if BOTH are true:
-- At least 1 new fact is present
-- That fact is not already in memory
-
-Otherwise return has_new_data=false.
-
-5. SUMMARY QUALITY RULE
-The summary must be:
-- specific
-- self-contained (understandable without context)
-- fact-dense
-- free of filler words
-
-Bad example:
-"They are discussing project updates."
-
-Good example:
-"The team decided to delay the API release to next week due to missing authentication tests."
+4. TYPE RULE
+- type MUST be exactly one value
+- do NOT return multiple values
+- do NOT use separators like "|"
 
 ----------------------------------------
-EXISTING MEMORY (DO NOT REPEAT OR PARAPHRASE):
+EXISTING MEMORY
+----------------------------------------
 {memory_text}
 
-RECENT TRANSCRIPT (ONLY NEW INFORMATION):
+----------------------------------------
+RECENT TRANSCRIPT
+----------------------------------------
 {context_text}
 """
 
             payload = {
                 "model": model,
                 "messages": [
-                    {"role": "system", "content": "Return only valid JSON."},
-                    {"role": "user", "content": prompt},
+                    {
+                        "role": "system",
+                        "content": "Return only valid JSON.",
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
                 ],
                 "stream": False,
                 "temperature": 0.1,
-                "response_format": {"type": "json_object"},
+                "response_format": {
+                    "type": "json_object",
+                },
             }
 
-            conn = http.client.HTTPConnection(host, int(port), timeout=20)
+            conn = http.client.HTTPConnection(
+                host,
+                int(port),
+                timeout=20,
+            )
+
             conn.request(
                 "POST",
                 "/v1/chat/completions",
                 body=json.dumps(payload),
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                },
             )
 
             response = conn.getresponse()
@@ -154,32 +151,24 @@ RECENT TRANSCRIPT (ONLY NEW INFORMATION):
                 return
 
             data = json.loads(response.read().decode())
+
             output = data["choices"][0]["message"]["content"].strip()
 
             try:
                 parsed = json.loads(output)
+
             except Exception:
                 logging.error(f"[LLM] invalid JSON response:\n{output}")
                 return
 
             logging.info(f"[LLM] response:\n{json.dumps(parsed, indent=2)}")
 
-            # -----------------------------------
-            # HARD GATE: suppress useless output
-            # -----------------------------------
-            if not parsed.get("has_new_data", False):
-                logging.info("[LLM] no new data — skipping callback")
-                return
-
-            if not parsed.get("summary") and not parsed.get("action_items"):
-                logging.info("[LLM] empty structured output — skipping")
-                return
-
-            if callback:
+            if parsed.get("has_new_data") and callback:
                 callback(parsed)
 
         except Exception as e:
             logging.exception(f"[LLM] call failed: {e}")
+
         finally:
             if conn:
                 conn.close()

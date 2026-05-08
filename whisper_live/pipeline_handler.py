@@ -1,16 +1,20 @@
-from whisper_live.memory import MemoryStore
 import time
 import logging
+
 from collections import defaultdict
 
-from whisper_live.db.repository import insert_transcript, insert_insight
+from whisper_live.memory import MemoryStore
 from whisper_live.llm import call_llm_async
-
+from whisper_live.db.repository import (
+    save_transcript,
+    save_insight,
+)
 
 MIN_CHARS = 300
 MAX_WAIT = 30
 
 LAST_LLM_CALL = defaultdict(lambda: 0.0)
+LAST_SEGMENT_INDEX = defaultdict(lambda: 0)
 PENDING_CHARS = defaultdict(lambda: 0)
 
 memory = MemoryStore()
@@ -18,17 +22,15 @@ memory = MemoryStore()
 
 def on_statement_finalized(segment, meeting_id):
     text = (segment.get("text") or "").strip()
+
     if not text:
         return
 
-    # timestamp normalization
+    # normalize timestamps
     segment["start_ts"] = float(segment.get("start", 0))
     segment["end_ts"] = float(segment.get("end", 0))
 
-    # persist raw transcript
-    insert_transcript(meeting_id, segment)
-
-    # memory update
+    # update memory
     memory.add(meeting_id, segment)
 
     # batching logic
@@ -40,33 +42,44 @@ def on_statement_finalized(segment, meeting_id):
     last_call = LAST_LLM_CALL[meeting_id]
 
     enough_chars = chars >= MIN_CHARS
+
     timed_out = (now - last_call) >= MAX_WAIT and chars > 0
 
     if not (enough_chars or timed_out):
         logging.info(f"[LLM] waiting — {chars}/{MIN_CHARS}")
         return
 
-    new_context, new_index = memory.get_new_context(meeting_id)
+    new_context, new_index = memory.get_new_context(
+        meeting_id,
+        LAST_SEGMENT_INDEX[meeting_id],
+    )
 
     if not new_context:
         return
 
     LAST_LLM_CALL[meeting_id] = now
+    LAST_SEGMENT_INDEX[meeting_id] = new_index
     PENDING_CHARS[meeting_id] = 0
 
-    start_ts = new_context[0]["start_ts"]
-    end_ts = new_context[-1]["end_ts"]
+    logging.info(
+        f"[LLM] firing — {chars} chars, "
+        f"{len(new_context)} new segments "
+        f"(timed_out={timed_out})"
+    )
 
-    # -------------------------
-    # LLM call
-    # -------------------------
+    # insight callback
     def handle_insight(insight):
-        insight["start_ts"] = start_ts
-        insight["end_ts"] = end_ts
+        memory.add_insight(
+            meeting_id,
+            insight,
+        )
 
-        memory.add_insight(meeting_id, insight)
-        insert_insight(meeting_id, insight)
+        save_insight(
+            meeting_id,
+            insight,
+        )
 
+    # llm call
     call_llm_async(
         host="localhost",
         port=3000,
@@ -75,3 +88,15 @@ def on_statement_finalized(segment, meeting_id):
         existing_memory=memory.get_recent_insights(meeting_id),
         callback=handle_insight,
     )
+
+
+def finalize_meeting(meeting_id):
+    transcript = memory.get_full_transcript(meeting_id)
+
+    save_transcript(
+        meeting_id,
+        transcript,
+    )
+    memory.clear(meeting_id)
+
+    logging.info(f"[MEETING] finalized {meeting_id}")

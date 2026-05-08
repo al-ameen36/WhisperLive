@@ -1,7 +1,6 @@
 from collections import defaultdict, deque
 import threading
-import json
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 
 class MeetingSession:
@@ -16,8 +15,8 @@ class MeetingSession:
 class MemoryStore:
     def __init__(self):
         self.sessions = defaultdict(MeetingSession)
-        self.lock = threading.Lock()
 
+    # transcript state
     def add(self, meeting_id, segment):
         session = self.sessions[meeting_id]
 
@@ -25,59 +24,60 @@ class MemoryStore:
             session.transcript.append(segment)
             session.context.append(segment)
 
-        self.broadcast_transcript(session, segment)
+    def get_context(self, meeting_id, n=20):
+        session = self.sessions[meeting_id]
 
+        with session.lock:
+            return list(session.context)[-n:]
+
+    def get_new_context(self, meeting_id, last_index=0):
+        session = self.sessions[meeting_id]
+
+        with session.lock:
+            new_context = session.transcript[last_index:]
+            new_index = len(session.transcript)
+
+        return new_context, new_index
+
+    def get_full_transcript(self, meeting_id):
+        session = self.sessions[meeting_id]
+
+        with session.lock:
+            lines = []
+
+            for segment in session.transcript:
+                text = (segment.get("text") or "").strip()
+
+                if not text:
+                    continue
+
+                start_ts = float(segment.get("start_ts", 0))
+                end_ts = float(segment.get("end_ts", 0))
+
+                lines.append(f"[{start_ts:.2f} - {end_ts:.2f}] {text}")
+
+            return "\n".join(lines)
+
+    # insights state
     def add_insight(self, meeting_id, insight):
         session = self.sessions[meeting_id]
 
         with session.lock:
             session.insights.append(insight)
 
-        self.broadcast_insight(session, insight)
-
-    def get_context(self, meeting_id, n=20):
-        session = self.sessions[meeting_id]
-        with session.lock:
-            return list(session.context)[-n:]
-
-    def get_new_context(self, meeting_id, last_index=0):
-        session = self.sessions[meeting_id]
-        with session.lock:
-            new_context = session.transcript[last_index:]
-            new_index = len(session.transcript)
-        return new_context, new_index
-
     def get_recent_insights(self, meeting_id, n=10):
         session = self.sessions[meeting_id]
+
         with session.lock:
             return session.insights[-n:]
 
-    def broadcast_transcript(self, session, segment):
-        msg = json.dumps(
-            {
-                "type": "transcript_update",
-                "segment": segment,
-            }
-        )
-        self._broadcast(session, msg)
+    def get_all_insights(self, meeting_id):
+        session = self.sessions[meeting_id]
 
-    def broadcast_insight(self, session, insight):
-        msg = json.dumps(
-            {
-                "type": "insight_update",
-                "insight": insight,
-            }
-        )
-        self._broadcast(session, msg)
+        with session.lock:
+            return list(session.insights)
 
-    def _broadcast(self, session, msg):
-        dead = []
-
-        for ws in session.subscribers:
-            try:
-                ws.send(msg)
-            except Exception:
-                dead.append(ws)
-
-        for d in dead:
-            session.subscribers.discard(d)
+    # cleanup
+    def clear(self, meeting_id):
+        if meeting_id in self.sessions:
+            del self.sessions[meeting_id]

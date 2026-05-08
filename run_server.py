@@ -1,20 +1,55 @@
 import os
 import logging
+import signal
+import sys
 from pyngrok import ngrok as pyngrok
 from whisper_live.server import TranscriptionServer
-from whisper_live.pipeline_handler import on_statement_finalized
+from whisper_live.pipeline_handler import (
+    on_statement_finalized,
+    finalize_meeting,
+)
 from whisper_live.cli_arguments import args
 
 logging.basicConfig(level=logging.INFO)
 
+ACTIVE_MEETINGS = set()
+
+
+def handle_statement(segment, meeting_id):
+    ACTIVE_MEETINGS.add(meeting_id)
+    on_statement_finalized(segment, meeting_id)
+
+
+def shutdown_handler(signum, frame):
+    logging.info("[SYSTEM] shutting down")
+
+    for meeting_id in list(ACTIVE_MEETINGS):
+        try:
+            finalize_meeting(meeting_id)
+
+        except Exception as e:
+            logging.exception(f"[SYSTEM] failed to finalize {meeting_id}: {e}")
+
+    sys.exit(0)
+
+
 if __name__ == "__main__":
+    # graceful shutdown hooks
+    signal.signal(signal.SIGINT, shutdown_handler)
+    signal.signal(signal.SIGTERM, shutdown_handler)
+
+    # ngrok
     pyngrok.set_auth_token(os.environ.get("NGROK_AUTHTOKEN"))
+
     tunnel = pyngrok.connect(
         args.port,
         proto="http",
         hostname=os.environ.get("NGROK_DOMAIN"),
     )
+
     logging.info(f"Ngrok tunnel: {tunnel.public_url}")
+
+    # whisper server
 
     server = TranscriptionServer()
 
@@ -38,5 +73,5 @@ if __name__ == "__main__":
         batch_window_ms=args.batch_window_ms,
         raw_pcm_input=args.raw_pcm_input,
         use_vad=not args.no_vad,
-        on_statement_finalized=on_statement_finalized,
+        on_statement_finalized=handle_statement,
     )
