@@ -2,43 +2,60 @@ import http.client
 import json
 import logging
 import threading
+from typing import Callable, Optional, List, Dict, Any
 
 
-def call_llm_async(host, port, model, context, existing_memory=None, callback=None):
+def call_llm_async(
+    host: str,
+    port: int,
+    model: str,
+    context: List[Dict[str, Any]],
+    existing_memory: Optional[List[Dict[str, Any]]] = None,
+    callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+):
     def run():
         conn = None
         try:
             context_text = "\n".join(
                 f"- {s.get('text', '')}" for s in context if s and s.get("text")
             )
-            memory_text = "\n".join(
-                f"- {item.get('type', '')}: {item.get('items', [])}"
-                for item in (existing_memory or [])
-            )
 
             if not context_text.strip():
                 logging.warning("[LLM] empty context, skipping")
                 return
 
+            memory_text = "\n".join(
+                f"- [{item.get('type', '')}] {item.get('summary', '')} | "
+                f"topics: {item.get('topics', [])} | "
+                f"action_items: {item.get('action_items', [])}"
+                for item in (existing_memory or [])
+            )
+
             prompt = f"""
 You are a strict meeting state extractor.
 Only extract explicit, complete, and meaningful information.
-If uncertain, return no new data.
 Return JSON only.
 
-EMPTY FORMAT:
+FORMAT:
 {{
-  "type": "meeting_update",
-  "summary": "",
-  "has_new_data": false,
+  "type": one of: "decisions" | "questions" | "action_items" | "risks" | "followups" | "general",
+  "summary": "2-3 sentences of what is being discussed right now",
+  "has_new_data": true or false,
   "topics": [],
-  "data": []
+  "action_items": []
 }}
 
-EXISTING MEMORY:
+RULES:
+- type: pick the single most dominant thing happening in this transcript segment
+- summary: always fill this if there is anything meaningful being said
+- topics: high level subjects mentioned
+- action_items: only include this field if tasks were explicitly assigned, otherwise omit it
+- set has_new_data to false only if the transcript contains nothing meaningful
+
+EXISTING MEMORY (already reported — do not repeat, rephrase, or re-summarize any of this):
 {memory_text}
 
-RECENT TRANSCRIPT:
+RECENT TRANSCRIPT (only extract what is NEW relative to existing memory):
 {context_text}
 """
 
@@ -79,7 +96,7 @@ RECENT TRANSCRIPT:
 
             logging.info(f"[LLM] response:\n{json.dumps(parsed, indent=2)}")
 
-            if callback and parsed.get("has_new_data"):
+            if parsed.get("has_new_data") and callback:
                 callback(parsed)
 
         except Exception as e:

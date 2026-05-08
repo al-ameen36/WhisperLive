@@ -1,18 +1,15 @@
 from collections import defaultdict, deque
 import threading
 import json
+from typing import Any, Dict, List, Tuple
 
 
 class MeetingSession:
     def __init__(self):
-        self.transcript = []
+        self.transcript: List[Dict[str, Any]] = []
         self.context = deque(maxlen=50)
-
-        # Stores structured LLM outputs
-        self.insights = []
-
+        self.insights: List[Dict[str, Any]] = []
         self.subscribers = set()
-
         self.lock = threading.Lock()
 
 
@@ -40,13 +37,20 @@ class MemoryStore:
 
     def get_context(self, meeting_id, n=20):
         session = self.sessions[meeting_id]
+        with session.lock:
+            return list(session.context)[-n:]
 
-        return list(session.context)[-n:]
+    def get_new_context(self, meeting_id, last_index=0):
+        session = self.sessions[meeting_id]
+        with session.lock:
+            new_context = session.transcript[last_index:]
+            new_index = len(session.transcript)
+        return new_context, new_index
 
     def get_recent_insights(self, meeting_id, n=10):
         session = self.sessions[meeting_id]
-
-        return session.insights[-n:]
+        with session.lock:
+            return session.insights[-n:]
 
     def broadcast_transcript(self, session, segment):
         msg = json.dumps(
@@ -55,7 +59,6 @@ class MemoryStore:
                 "segment": segment,
             }
         )
-
         self._broadcast(session, msg)
 
     def broadcast_insight(self, session, insight):
@@ -65,7 +68,6 @@ class MemoryStore:
                 "insight": insight,
             }
         )
-
         self._broadcast(session, msg)
 
     def _broadcast(self, session, msg):
@@ -74,7 +76,6 @@ class MemoryStore:
         for ws in session.subscribers:
             try:
                 ws.send(msg)
-
             except Exception:
                 dead.append(ws)
 
