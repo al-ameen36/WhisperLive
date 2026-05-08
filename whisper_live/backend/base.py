@@ -301,6 +301,10 @@ class ServeClientBase(object):
 
         # Process complete segments only if there are more than one
         # and if the last segment's no_speech_prob is below the threshold.
+        logging.debug(f"update_segments: len(segments)={len(segments)}")
+        if len(segments) > 0:
+             logging.debug(f"update_segments: last segment prob={self.get_segment_no_speech_prob(segments[-1])}, threshold={self.no_speech_thresh}")
+
         if len(segments) > 1 and self.get_segment_no_speech_prob(segments[-1]) <= self.no_speech_thresh:
             for s in segments[:-1]:
                 text_ = s.text
@@ -322,11 +326,18 @@ class ServeClientBase(object):
                         logging.warning("Translation queue is full, skipping segment")
 
                 if self.on_statement_finalized:
+                    completed_segment["uid"] = self.client_uid
+                    logging.info(f"Finalized segment: {completed_segment.get('text', '')[:50]}...")
                     self.on_statement_finalized(completed_segment)
+                else:
+                    logging.debug("No on_statement_finalized callback set in client")
 
                 offset = min(duration, self.get_segment_end(s))
 
-        # Process the last segment if its no_speech_prob is acceptable.
+        # Process the last segment
+        # If there is only one segment and it's quite old (e.g. > 3 seconds), 
+        # we might want to finalize it anyway or at least log it.
+        # But standard behavior is to wait for it to be confirmed by "same output" or by a next segment.
         if self.get_segment_no_speech_prob(segments[-1]) <= self.no_speech_thresh:
             self.current_out += segments[-1].text
             with self.lock:
@@ -371,6 +382,8 @@ class ServeClientBase(object):
                             logging.warning("Translation queue is full, skipping segment")
 
                     if self.on_statement_finalized:
+                        completed_segment["uid"] = self.client_uid
+                        logging.info(f"Finalized segment (repetition): {completed_segment.get('text', '')[:50]}...")
                         self.on_statement_finalized(completed_segment)
 
             self.current_out = ''

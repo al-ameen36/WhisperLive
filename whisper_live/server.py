@@ -181,7 +181,10 @@ class TranscriptionServer:
         whisper_tensorrt_path, trt_multilingual, trt_py_session=False,
         on_statement_finalized=None,
     ):
-        logging.info(f"Initializing client with callback: {on_statement_finalized is not None}")
+        logging.info(f"Initializing client {options.get('uid')} with callback: {on_statement_finalized is not None}")
+        if on_statement_finalized is None and self.on_statement_finalized is not None:
+            logging.warning(f"on_statement_finalized is None in initialize_client, but self.on_statement_finalized is set! Root cause?")
+            on_statement_finalized = self.on_statement_finalized
         client: Optional[ServeClientBase] = None
 
         # Check if client wants translation
@@ -510,8 +513,8 @@ class TranscriptionServer:
         """
         self.cache_path = cache_path
         self.raw_pcm_input = raw_pcm_input
-        self.use_vad = use_vad
         self.on_statement_finalized = on_statement_finalized
+        logging.info(f"TranscriptionServer.run called with on_statement_finalized: {on_statement_finalized is not None}")
         self.client_manager = ClientManager(max_clients, max_connection_time)
         if faster_whisper_custom_model_path is not None and not os.path.exists(faster_whisper_custom_model_path):
             if "/" not in faster_whisper_custom_model_path:
