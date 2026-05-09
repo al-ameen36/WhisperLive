@@ -8,8 +8,34 @@ import logging
 import shutil
 import tempfile
 from typing import Optional, List
-from fastapi import FastAPI, UploadFile, Form
+from fastapi import FastAPI, UploadFile, Form, Depends, Security, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+try:
+    from supabase import create_client, Client
+except ImportError:
+    Client = None
+    create_client = None
+
+supabase_url = os.environ.get("SUPABASE_URL")
+supabase_key = os.environ.get("SUPABASE_KEY")
+supabase_client = create_client(supabase_url, supabase_key) if supabase_url and supabase_key and create_client else None
+
+security = HTTPBearer()
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
+    if not supabase_client:
+        return None
+    token = credentials.credentials
+    try:
+        user_resp = supabase_client.auth.get_user(token)
+        if not user_resp or not user_resp.user:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return user_resp.user
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
 from starlette.responses import PlainTextResponse, JSONResponse
 import uvicorn
 import torch
@@ -382,6 +408,25 @@ class TranscriptionServer:
             options = websocket.recv()
             options = json.loads(options)
 
+            if supabase_client:
+                token = options.get("token")
+                if not token:
+                    logging.error("Authentication token missing")
+                    websocket.send(json.dumps({"uid": options.get("uid"), "status": "ERROR", "message": "Authentication token missing"}))
+                    websocket.close()
+                    return False
+                try:
+                    user_resp = supabase_client.auth.get_user(token)
+                    if not user_resp or not user_resp.user:
+                        raise ValueError("Invalid user")
+                    options["user_id"] = user_resp.user.id
+                    logging.info(f"Authenticated user: {options['user_id']}")
+                except Exception as e:
+                    logging.error(f"Auth failed: {e}")
+                    websocket.send(json.dumps({"uid": options.get("uid"), "status": "ERROR", "message": "Invalid authentication token"}))
+                    websocket.close()
+                    return False
+
             self.use_vad = options.get('use_vad', self.use_vad)
             if self.client_manager.is_server_full(websocket, options):
                 websocket.close()
@@ -559,6 +604,7 @@ class TranscriptionServer:
             @app.post("/v1/audio/transcriptions")
             async def transcribe(
                 file: UploadFile,
+                current_user = Depends(verify_token),
                 model: str = Form(default="whisper-1"),
                 language: Optional[str] = Form(default=None),
                 prompt: Optional[str] = Form(default=None),
