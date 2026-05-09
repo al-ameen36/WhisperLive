@@ -33,6 +33,15 @@ def shutdown_handler(signum, frame):
     sys.exit(0)
 
 
+def handle_meeting_end(meeting_id):
+    if meeting_id in ACTIVE_MEETINGS:
+        ACTIVE_MEETINGS.discard(meeting_id)
+        try:
+            finalize_meeting(meeting_id)
+        except Exception as e:
+            logging.exception(f"[MEETING] failed to finalize {meeting_id}: {e}")
+
+
 if __name__ == "__main__":
     # graceful shutdown hooks
     signal.signal(signal.SIGINT, shutdown_handler)
@@ -74,4 +83,5 @@ if __name__ == "__main__":
         raw_pcm_input=args.raw_pcm_input,
         use_vad=not args.no_vad,
         on_statement_finalized=handle_statement,
+        on_meeting_end=handle_meeting_end,
     )

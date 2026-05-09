@@ -20,13 +20,20 @@ except ImportError:
 
 supabase_url = os.environ.get("SUPABASE_URL")
 supabase_key = os.environ.get("SUPABASE_KEY")
-supabase_client = create_client(supabase_url, supabase_key) if supabase_url and supabase_key and create_client else None
+supabase_client = (
+    create_client(supabase_url, supabase_key)
+    if supabase_url and supabase_key and create_client
+    else None
+)
 
 security = HTTPBearer()
 
+
 def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
     if not supabase_client:
-        raise HTTPException(status_code=500, detail="Server authentication is not configured.")
+        raise HTTPException(
+            status_code=500, detail="Server authentication is not configured."
+        )
     token = credentials.credentials
     try:
         user_resp = supabase_client.auth.get_user(token)
@@ -35,6 +42,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(security))
         return user_resp.user
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
+
 
 from starlette.responses import PlainTextResponse, JSONResponse
 import uvicorn
@@ -49,6 +57,7 @@ from whisper_live.vad import VoiceActivityDetector
 from whisper_live.backend.base import ServeClientBase
 
 logging.basicConfig(level=logging.INFO)
+
 
 class ClientManager:
     def __init__(self, max_clients=4, max_connection_time=600):
@@ -65,6 +74,7 @@ class ClientManager:
         self.max_clients = max_clients
         self.max_connection_time = max_connection_time
         self.lock = threading.Lock()
+        self.on_meeting_end = None
 
     def add_client(self, websocket, client):
         """
@@ -117,7 +127,9 @@ class ClientManager:
         with self.lock:
             wait_time = None
             for start_time in self.start_times.values():
-                current_client_time_remaining = self.max_connection_time - (time.time() - start_time)
+                current_client_time_remaining = self.max_connection_time - (
+                    time.time() - start_time
+                )
                 if wait_time is None or current_client_time_remaining < wait_time:
                     wait_time = current_client_time_remaining
         return wait_time / 60 if wait_time is not None else 0
@@ -141,7 +153,11 @@ class ClientManager:
                     if wait_time is None or remaining < wait_time:
                         wait_time = remaining
                 wait_time_minutes = wait_time / 60 if wait_time is not None else 0
-                response = {"uid": options["uid"], "status": "WAIT", "message": wait_time_minutes}
+                response = {
+                    "uid": options["uid"],
+                    "status": "WAIT",
+                    "message": wait_time_minutes,
+                }
                 websocket.send(json.dumps(response))
                 return True
             return False
@@ -161,7 +177,9 @@ class ClientManager:
             client = self.clients.get(websocket)
         if elapsed_time >= self.max_connection_time and client:
             client.disconnect()
-            logging.warning(f"Client with uid '{client.client_uid}' disconnected due to overtime.")
+            logging.warning(
+                f"Client with uid '{client.client_uid}' disconnected due to overtime."
+            )
             return True
         return False
 
@@ -185,7 +203,7 @@ class BackendType(Enum):
 
     def is_tensorrt(self) -> bool:
         return self == BackendType.TENSORRT
-    
+
     def is_openvino(self) -> bool:
         return self == BackendType.OPENVINO
 
@@ -203,48 +221,60 @@ class TranscriptionServer:
         self.on_statement_finalized = None
 
     def initialize_client(
-        self, websocket, options, faster_whisper_custom_model_path,
-        whisper_tensorrt_path, trt_multilingual, trt_py_session=False,
+        self,
+        websocket,
+        options,
+        faster_whisper_custom_model_path,
+        whisper_tensorrt_path,
+        trt_multilingual,
+        trt_py_session=False,
         on_statement_finalized=None,
     ):
-        logging.info(f"Initializing client {options.get('uid')} with callback: {on_statement_finalized is not None}")
+        logging.info(
+            f"Initializing client {options.get('uid')} with callback: {on_statement_finalized is not None}"
+        )
         if on_statement_finalized is None and self.on_statement_finalized is not None:
-            logging.warning(f"on_statement_finalized is None in initialize_client, but self.on_statement_finalized is set! Root cause?")
+            logging.warning(
+                f"on_statement_finalized is None in initialize_client, but self.on_statement_finalized is set! Root cause?"
+            )
             on_statement_finalized = self.on_statement_finalized
         client: Optional[ServeClientBase] = None
 
         # Check if client wants translation
         enable_translation = options.get("enable_translation", False)
-        
+
         # Create translation queue if translation is enabled
         translation_queue = None
         translation_client = None
         translation_thread = None
-        
+
         if enable_translation:
             target_language = options.get("target_language", "fr")
             translation_queue = queue.Queue()
             from whisper_live.backend.translation_backend import ServeClientTranslation
+
             translation_client = ServeClientTranslation(
                 client_uid=options["uid"],
                 websocket=websocket,
                 translation_queue=translation_queue,
                 target_language=target_language,
-                send_last_n_segments=options.get("send_last_n_segments", 10)
+                send_last_n_segments=options.get("send_last_n_segments", 10),
             )
-            
+
             # Start translation thread
             translation_thread = threading.Thread(
-                target=translation_client.speech_to_text,
-                daemon=True
+                target=translation_client.speech_to_text, daemon=True
             )
             translation_thread.start()
-            
-            logging.info(f"Translation enabled for client {options['uid']} with target language: {target_language}")
+
+            logging.info(
+                f"Translation enabled for client {options['uid']} with target language: {target_language}"
+            )
 
         if self.backend.is_tensorrt():
             try:
                 from whisper_live.backend.trt_backend import ServeClientTensorRT
+
                 client = ServeClientTensorRT(
                     websocket,
                     multilingual=trt_multilingual,
@@ -264,17 +294,22 @@ class TranscriptionServer:
             except Exception as e:
                 logging.error(f"TensorRT-LLM not supported: {e}")
                 self.client_uid = options["uid"]
-                websocket.send(json.dumps({
-                    "uid": self.client_uid,
-                    "status": "WARNING",
-                    "message": "TensorRT-LLM not supported on Server yet. "
-                               "Reverting to available backend: 'faster_whisper'"
-                }))
+                websocket.send(
+                    json.dumps(
+                        {
+                            "uid": self.client_uid,
+                            "status": "WARNING",
+                            "message": "TensorRT-LLM not supported on Server yet. "
+                            "Reverting to available backend: 'faster_whisper'",
+                        }
+                    )
+                )
                 self.backend = BackendType.FASTER_WHISPER
-        
+
         if self.backend.is_openvino():
             try:
                 from whisper_live.backend.openvino_backend import ServeClientOpenVINO
+
                 client = ServeClientOpenVINO(
                     websocket,
                     language=options["language"],
@@ -293,16 +328,21 @@ class TranscriptionServer:
                 logging.error(f"OpenVINO not supported: {e}")
                 self.backend = BackendType.FASTER_WHISPER
                 self.client_uid = options["uid"]
-                websocket.send(json.dumps({
-                    "uid": self.client_uid,
-                    "status": "WARNING",
-                    "message": "OpenVINO not supported on Server yet. "
-                                "Reverting to available backend: 'faster_whisper'"
-                }))
+                websocket.send(
+                    json.dumps(
+                        {
+                            "uid": self.client_uid,
+                            "status": "WARNING",
+                            "message": "OpenVINO not supported on Server yet. "
+                            "Reverting to available backend: 'faster_whisper'",
+                        }
+                    )
+                )
 
         try:
             if self.backend == BackendType.WHISPER:
                 from whisper_live.backend.whisper_backend import ServeClientWhisper
+
                 client = ServeClientWhisper(
                     websocket,
                     language=options["language"],
@@ -325,18 +365,28 @@ class TranscriptionServer:
 
             if self.backend.is_faster_whisper():
                 try:
-                    from whisper_live.backend.faster_whisper_backend import ServeClientFasterWhisper
+                    from whisper_live.backend.faster_whisper_backend import (
+                        ServeClientFasterWhisper,
+                    )
                 except ImportError:
-                    logging.error("faster-whisper is not installed. Please install it to use this backend.")
-                    websocket.send(json.dumps({
-                        "uid": options["uid"],
-                        "status": "ERROR",
-                        "message": "faster-whisper is not installed on the server."
-                    }))
+                    logging.error(
+                        "faster-whisper is not installed. Please install it to use this backend."
+                    )
+                    websocket.send(
+                        json.dumps(
+                            {
+                                "uid": options["uid"],
+                                "status": "ERROR",
+                                "message": "faster-whisper is not installed on the server.",
+                            }
+                        )
+                    )
                     return
                 # model is of the form namespace/repo_name and not a filesystem path
                 if faster_whisper_custom_model_path is not None:
-                    logging.info(f"Using custom model {faster_whisper_custom_model_path}")
+                    logging.info(
+                        f"Using custom model {faster_whisper_custom_model_path}"
+                    )
                     options["model"] = faster_whisper_custom_model_path
                 client = ServeClientFasterWhisper(
                     websocket,
@@ -360,10 +410,13 @@ class TranscriptionServer:
                 logging.info("Running faster_whisper backend.")
 
                 # Start batch inference worker on first client (after model is loaded)
-                if (self.batch_config is not None
-                        and ServeClientFasterWhisper.BATCH_WORKER is None
-                        and ServeClientFasterWhisper.SINGLE_MODEL is not None):
+                if (
+                    self.batch_config is not None
+                    and ServeClientFasterWhisper.BATCH_WORKER is None
+                    and ServeClientFasterWhisper.SINGLE_MODEL is not None
+                ):
                     from whisper_live.batch_inference import BatchInferenceWorker
+
                     worker = BatchInferenceWorker(
                         transcriber=ServeClientFasterWhisper.SINGLE_MODEL,
                         **self.batch_config,
@@ -375,7 +428,9 @@ class TranscriptionServer:
             return
 
         if client is None:
-            raise ValueError(f"Backend type {self.backend.value} not recognised or not handled.")
+            raise ValueError(
+                f"Backend type {self.backend.value} not recognised or not handled."
+            )
 
         if translation_client:
             client.translation_client = translation_client
@@ -401,8 +456,14 @@ class TranscriptionServer:
             return audio_np.astype(np.float32) / 32768.0
         return np.frombuffer(frame_data, dtype=np.float32)
 
-    def handle_new_connection(self, websocket, faster_whisper_custom_model_path,
-                              whisper_tensorrt_path, trt_multilingual, trt_py_session=False):
+    def handle_new_connection(
+        self,
+        websocket,
+        faster_whisper_custom_model_path,
+        whisper_tensorrt_path,
+        trt_multilingual,
+        trt_py_session=False,
+    ):
         try:
             logging.info("New client connected")
             options = websocket.recv()
@@ -411,16 +472,32 @@ class TranscriptionServer:
             token = options.get("token")
             if not token:
                 logging.error("Authentication token missing")
-                websocket.send(json.dumps({"uid": options.get("uid"), "status": "ERROR", "message": "Authentication token missing"}))
+                websocket.send(
+                    json.dumps(
+                        {
+                            "uid": options.get("uid"),
+                            "status": "ERROR",
+                            "message": "Authentication token missing",
+                        }
+                    )
+                )
                 websocket.close()
                 return False
-                
+
             if not supabase_client:
                 logging.error("Supabase not configured, cannot authenticate")
-                websocket.send(json.dumps({"uid": options.get("uid"), "status": "ERROR", "message": "Server authentication not configured"}))
+                websocket.send(
+                    json.dumps(
+                        {
+                            "uid": options.get("uid"),
+                            "status": "ERROR",
+                            "message": "Server authentication not configured",
+                        }
+                    )
+                )
                 websocket.close()
                 return False
-                
+
             try:
                 user_resp = supabase_client.auth.get_user(token)
                 if not user_resp or not user_resp.user:
@@ -429,11 +506,19 @@ class TranscriptionServer:
                 logging.info(f"Authenticated user: {options['user_id']}")
             except Exception as e:
                 logging.error(f"Auth failed: {e}")
-                websocket.send(json.dumps({"uid": options.get("uid"), "status": "ERROR", "message": "Invalid authentication token"}))
+                websocket.send(
+                    json.dumps(
+                        {
+                            "uid": options.get("uid"),
+                            "status": "ERROR",
+                            "message": "Invalid authentication token",
+                        }
+                    )
+                )
                 websocket.close()
                 return False
 
-            self.use_vad = options.get('use_vad', self.use_vad)
+            self.use_vad = options.get("use_vad", self.use_vad)
             if self.client_manager.is_server_full(websocket, options):
                 websocket.close()
                 return False  # Indicates that the connection should not continue
@@ -441,9 +526,13 @@ class TranscriptionServer:
             if self.backend.is_tensorrt():
                 self.vad_detector = VoiceActivityDetector(frame_rate=self.RATE)
             self.initialize_client(
-                websocket, options, faster_whisper_custom_model_path,
-                whisper_tensorrt_path, trt_multilingual, trt_py_session=trt_py_session,
-                on_statement_finalized=self.on_statement_finalized
+                websocket,
+                options,
+                faster_whisper_custom_model_path,
+                whisper_tensorrt_path,
+                trt_multilingual,
+                trt_py_session=trt_py_session,
+                on_statement_finalized=self.on_statement_finalized,
             )
             return True
         except json.JSONDecodeError:
@@ -475,13 +564,15 @@ class TranscriptionServer:
         client.add_frames(frame_np)
         return True
 
-    def recv_audio(self,
-                   websocket,   
-                   backend: BackendType = BackendType.FASTER_WHISPER,
-                   faster_whisper_custom_model_path=None,
-                   whisper_tensorrt_path=None,
-                   trt_multilingual=False,
-                   trt_py_session=False):
+    def recv_audio(
+        self,
+        websocket,
+        backend: BackendType = BackendType.FASTER_WHISPER,
+        faster_whisper_custom_model_path=None,
+        whisper_tensorrt_path=None,
+        trt_multilingual=False,
+        trt_py_session=False,
+    ):
         """
         Receive audio chunks from a client in an infinite loop.
 
@@ -507,8 +598,13 @@ class TranscriptionServer:
             Exception: If there is an error during the audio frame processing.
         """
         self.backend = backend
-        if not self.handle_new_connection(websocket, faster_whisper_custom_model_path,
-                                          whisper_tensorrt_path, trt_multilingual, trt_py_session=trt_py_session):
+        if not self.handle_new_connection(
+            websocket,
+            faster_whisper_custom_model_path,
+            whisper_tensorrt_path,
+            trt_multilingual,
+            trt_py_session=trt_py_session,
+        ):
             return
 
         try:
@@ -525,27 +621,30 @@ class TranscriptionServer:
                 websocket.close()
             del websocket
 
-    def run(self,
-            host,
-            port=9090,
-            backend="tensorrt",
-            faster_whisper_custom_model_path=None,
-            whisper_tensorrt_path=None,
-            trt_multilingual=False,
-            trt_py_session=False,
-            single_model=False,
-            max_clients=4,
-            max_connection_time=600,
-            cache_path="~/.cache/whisper-live/",
-            rest_port=8000,
-            enable_rest=False,
-            cors_origins: Optional[str] = None,
-            batch_enabled=False,
-            batch_max_size=8,
-            batch_window_ms=50,
-            raw_pcm_input=False,
-            use_vad=True,
-            on_statement_finalized=None):
+    def run(
+        self,
+        host,
+        port=9090,
+        backend="tensorrt",
+        faster_whisper_custom_model_path=None,
+        whisper_tensorrt_path=None,
+        trt_multilingual=False,
+        trt_py_session=False,
+        single_model=False,
+        max_clients=4,
+        max_connection_time=600,
+        cache_path="~/.cache/whisper-live/",
+        rest_port=8000,
+        enable_rest=False,
+        cors_origins: Optional[str] = None,
+        batch_enabled=False,
+        batch_max_size=8,
+        batch_window_ms=50,
+        raw_pcm_input=False,
+        use_vad=True,
+        on_statement_finalized=None,
+        on_meeting_end=None,
+    ):
         """
         Run the transcription server.
 
@@ -565,39 +664,60 @@ class TranscriptionServer:
         self.cache_path = cache_path
         self.raw_pcm_input = raw_pcm_input
         self.on_statement_finalized = on_statement_finalized
-        logging.info(f"TranscriptionServer.run called with on_statement_finalized: {on_statement_finalized is not None}")
+        self.on_meeting_end = on_meeting_end
+        logging.info(
+            f"TranscriptionServer.run called with on_statement_finalized: {on_statement_finalized is not None}"
+        )
         self.client_manager = ClientManager(max_clients, max_connection_time)
-        if faster_whisper_custom_model_path is not None and not os.path.exists(faster_whisper_custom_model_path):
+        if faster_whisper_custom_model_path is not None and not os.path.exists(
+            faster_whisper_custom_model_path
+        ):
             if "/" not in faster_whisper_custom_model_path:
-                raise ValueError(f"Custom faster_whisper model '{faster_whisper_custom_model_path}' is not a valid path or HuggingFace model.")
-        if whisper_tensorrt_path is not None and not os.path.exists(whisper_tensorrt_path):
-            raise ValueError(f"TensorRT model '{whisper_tensorrt_path}' is not a valid path.")
+                raise ValueError(
+                    f"Custom faster_whisper model '{faster_whisper_custom_model_path}' is not a valid path or HuggingFace model."
+                )
+        if whisper_tensorrt_path is not None and not os.path.exists(
+            whisper_tensorrt_path
+        ):
+            raise ValueError(
+                f"TensorRT model '{whisper_tensorrt_path}' is not a valid path."
+            )
 
         # Batch inference config
         if batch_enabled:
             single_model = True  # Batch mode requires shared model
             self.batch_config = {
-                'max_batch_size': batch_max_size,
-                'batch_window_ms': batch_window_ms,
+                "max_batch_size": batch_max_size,
+                "batch_window_ms": batch_window_ms,
             }
-            logging.info(f"Batch inference enabled (max_batch={batch_max_size}, window={batch_window_ms}ms)")
+            logging.info(
+                f"Batch inference enabled (max_batch={batch_max_size}, window={batch_window_ms}ms)"
+            )
         else:
             self.batch_config = None
 
         if single_model:
             if faster_whisper_custom_model_path or whisper_tensorrt_path:
-                logging.info("Custom model option was provided. Switching to single model mode.")
+                logging.info(
+                    "Custom model option was provided. Switching to single model mode."
+                )
                 self.single_model = True
                 # TODO: load model initially
             else:
-                logging.info("Single model mode currently only works with custom models.")
+                logging.info(
+                    "Single model mode currently only works with custom models."
+                )
         if not BackendType.is_valid(backend):
-            raise ValueError(f"{backend} is not a valid backend type. Choose backend from {BackendType.valid_types()}")
+            raise ValueError(
+                f"{backend} is not a valid backend type. Choose backend from {BackendType.valid_types()}"
+            )
 
         # New OpenAI-compatible REST API (toggleable via enable_rest boolean)
         if enable_rest:
             app = FastAPI(title="WhisperLive OpenAI-Compatible API")
-            origins = [o.strip() for o in cors_origins.split(',')] if cors_origins else []
+            origins = (
+                [o.strip() for o in cors_origins.split(",")] if cors_origins else []
+            )
             app.add_middleware(
                 CORSMiddleware,
                 allow_origins=origins,
@@ -606,11 +726,10 @@ class TranscriptionServer:
                 allow_headers=["*"],  # Allows all headers
             )
 
-
             @app.post("/v1/audio/transcriptions")
             async def transcribe(
                 file: UploadFile,
-                current_user = Depends(verify_token),
+                current_user=Depends(verify_token),
                 model: str = Form(default="whisper-1"),
                 language: Optional[str] = Form(default=None),
                 prompt: Optional[str] = Form(default=None),
@@ -622,24 +741,38 @@ class TranscriptionServer:
                 include: Optional[List[str]] = Form(default=None),
                 known_speaker_names: Optional[List[str]] = Form(default=None),
                 known_speaker_references: Optional[List[str]] = Form(default=None),
-                stream: bool = Form(default=False)
+                stream: bool = Form(default=False),
             ):
                 if stream:
-                    return JSONResponse({"error": "Streaming not supported in this backend."}, status_code=400)
+                    return JSONResponse(
+                        {"error": "Streaming not supported in this backend."},
+                        status_code=400,
+                    )
                 if chunking_strategy or known_speaker_names or known_speaker_references:
-                    logging.warning("Diarization/chunking params ignored; not supported.")
+                    logging.warning(
+                        "Diarization/chunking params ignored; not supported."
+                    )
 
                 supported_formats = ["json", "text", "srt", "verbose_json", "vtt"]
                 if response_format not in supported_formats:
-                    return JSONResponse({"error": f"Unsupported response_format. Supported: {supported_formats}"}, status_code=400)
+                    return JSONResponse(
+                        {
+                            "error": f"Unsupported response_format. Supported: {supported_formats}"
+                        },
+                        status_code=400,
+                    )
 
                 if model != "whisper-1":
-                    logging.warning(f"Model '{model}' requested; using 'small' as fallback.")
+                    logging.warning(
+                        f"Model '{model}' requested; using 'small' as fallback."
+                    )
                 model_name = faster_whisper_custom_model_path or "small"
 
                 try:
                     suffix = os.path.splitext(file.filename)[1] or ".wav"
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                    with tempfile.NamedTemporaryFile(
+                        delete=False, suffix=suffix
+                    ) as tmp:
                         shutil.copyfileobj(file.file, tmp)
                         tmp_path = tmp.name
 
@@ -649,15 +782,25 @@ class TranscriptionServer:
                     try:
                         from faster_whisper import WhisperModel
                     except ImportError:
-                        return JSONResponse({"error": "faster-whisper is not installed. Please install it to use this endpoint."}, status_code=500)
-                    transcriber = WhisperModel(model_name, device=device, compute_type=compute_type)
+                        return JSONResponse(
+                            {
+                                "error": "faster-whisper is not installed. Please install it to use this endpoint."
+                            },
+                            status_code=500,
+                        )
+                    transcriber = WhisperModel(
+                        model_name, device=device, compute_type=compute_type
+                    )
                     segments, info = transcriber.transcribe(
                         tmp_path,
                         language=language,
                         initial_prompt=prompt,
                         temperature=temperature,
                         vad_filter=False,
-                        word_timestamps=(timestamp_granularities and "word" in timestamp_granularities)
+                        word_timestamps=(
+                            timestamp_granularities
+                            and "word" in timestamp_granularities
+                        ),
                     )
 
                     text = " ".join([s.text.strip() for s in segments])
@@ -673,7 +816,7 @@ class TranscriptionServer:
                             "language": info.language,
                             "duration": info.duration,
                             "text": text,
-                            "segments": []
+                            "segments": [],
                         }
                         for seg in segments:
                             seg_dict = {
@@ -686,10 +829,21 @@ class TranscriptionServer:
                                 "temperature": seg.temperature,
                                 "avg_logprob": seg.avg_logprob,
                                 "compression_ratio": seg.compression_ratio,
-                                "no_speech_prob": seg.no_speech_prob
+                                "no_speech_prob": seg.no_speech_prob,
                             }
-                            if timestamp_granularities and "word" in timestamp_granularities:
-                                seg_dict["words"] = [{"word": w.word, "start": w.start, "end": w.end, "probability": w.probability} for w in seg.words]
+                            if (
+                                timestamp_granularities
+                                and "word" in timestamp_granularities
+                            ):
+                                seg_dict["words"] = [
+                                    {
+                                        "word": w.word,
+                                        "start": w.start,
+                                        "end": w.end,
+                                        "probability": w.probability,
+                                    }
+                                    for w in seg.words
+                                ]
                             verbose["segments"].append(seg_dict)
                         return verbose
                     elif response_format in ["srt", "vtt"]:
@@ -698,9 +852,13 @@ class TranscriptionServer:
                             start = f"{int(seg.start // 3600):02}:{int((seg.start % 3600) // 60):02}:{seg.start % 60:06.3f}"
                             end = f"{int(seg.end // 3600):02}:{int((seg.end % 3600) // 60):02}:{seg.end % 60:06.3f}"
                             if response_format == "srt":
-                                output.append(f"{i}\n{start.replace('.', ',')} --> {end.replace('.', ',')}\n{seg.text.strip()}\n")
+                                output.append(
+                                    f"{i}\n{start.replace('.', ',')} --> {end.replace('.', ',')}\n{seg.text.strip()}\n"
+                                )
                             else:  # vtt
-                                output.append(f"{start} --> {end}\n{seg.text.strip()}\n")
+                                output.append(
+                                    f"{start} --> {end}\n{seg.text.strip()}\n"
+                                )
                         return PlainTextResponse("\n".join(output))
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
@@ -709,9 +867,11 @@ class TranscriptionServer:
                 target=uvicorn.run,
                 args=(app,),
                 kwargs={"host": "0.0.0.0", "port": rest_port, "log_level": "info"},
-                daemon=True
+                daemon=True,
             ).start()
-            logging.info(f"✅ OpenAI-Compatible API started on http://0.0.0.0:{rest_port}")
+            logging.info(
+                f"✅ OpenAI-Compatible API started on http://0.0.0.0:{rest_port}"
+            )
 
         # Original WebSocket server (always supported)
         with serve(
@@ -724,7 +884,7 @@ class TranscriptionServer:
                 trt_py_session=trt_py_session,
             ),
             host,
-            port
+            port,
         ) as server:
             server.serve_forever()
 
@@ -754,7 +914,7 @@ class TranscriptionServer:
                 client = self.client_manager.get_client(websocket)
                 if not client.eos:
                     client.set_eos(True)
-                time.sleep(0.1)    # Sleep 100m; wait some voice activity.
+                time.sleep(0.1)  # Sleep 100m; wait some voice activity.
             return False
         return True
 
@@ -767,10 +927,20 @@ class TranscriptionServer:
         """
         client = self.client_manager.get_client(websocket)
         if client:
-            if hasattr(client, 'translation_client') and client.translation_client:
+            if hasattr(client, "translation_client") and client.translation_client:
                 client.translation_client.cleanup()
-                
+
             # Wait for translation thread to finish
-            if hasattr(client, 'translation_thread') and client.translation_thread:
+            if hasattr(client, "translation_thread") and client.translation_thread:
                 client.translation_thread.join(timeout=2.0)
+
+            # finalize meeting before removing client
+            if self.on_meeting_end and hasattr(client, "client_uid"):
+                try:
+                    self.on_meeting_end(client.client_uid)
+                except Exception as e:
+                    logging.exception(
+                        f"[MEETING] failed to finalize {client.client_uid}: {e}"
+                    )
+
             self.client_manager.remove_client(websocket)

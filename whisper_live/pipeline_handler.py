@@ -99,4 +99,8 @@ def finalize_meeting(meeting_id):
     )
     memory.clear(meeting_id)
 
+    LAST_LLM_CALL.pop(meeting_id, None)
+    LAST_SEGMENT_INDEX.pop(meeting_id, None)
+    PENDING_CHARS.pop(meeting_id, None)
+
     logging.info(f"[MEETING] finalized {meeting_id}")
