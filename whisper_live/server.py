@@ -26,7 +26,7 @@ security = HTTPBearer()
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
     if not supabase_client:
-        return None
+        raise HTTPException(status_code=500, detail="Server authentication is not configured.")
     token = credentials.credentials
     try:
         user_resp = supabase_client.auth.get_user(token)
@@ -408,24 +408,30 @@ class TranscriptionServer:
             options = websocket.recv()
             options = json.loads(options)
 
-            if supabase_client:
-                token = options.get("token")
-                if not token:
-                    logging.error("Authentication token missing")
-                    websocket.send(json.dumps({"uid": options.get("uid"), "status": "ERROR", "message": "Authentication token missing"}))
-                    websocket.close()
-                    return False
-                try:
-                    user_resp = supabase_client.auth.get_user(token)
-                    if not user_resp or not user_resp.user:
-                        raise ValueError("Invalid user")
-                    options["user_id"] = user_resp.user.id
-                    logging.info(f"Authenticated user: {options['user_id']}")
-                except Exception as e:
-                    logging.error(f"Auth failed: {e}")
-                    websocket.send(json.dumps({"uid": options.get("uid"), "status": "ERROR", "message": "Invalid authentication token"}))
-                    websocket.close()
-                    return False
+            token = options.get("token")
+            if not token:
+                logging.error("Authentication token missing")
+                websocket.send(json.dumps({"uid": options.get("uid"), "status": "ERROR", "message": "Authentication token missing"}))
+                websocket.close()
+                return False
+                
+            if not supabase_client:
+                logging.error("Supabase not configured, cannot authenticate")
+                websocket.send(json.dumps({"uid": options.get("uid"), "status": "ERROR", "message": "Server authentication not configured"}))
+                websocket.close()
+                return False
+                
+            try:
+                user_resp = supabase_client.auth.get_user(token)
+                if not user_resp or not user_resp.user:
+                    raise ValueError("Invalid user")
+                options["user_id"] = user_resp.user.id
+                logging.info(f"Authenticated user: {options['user_id']}")
+            except Exception as e:
+                logging.error(f"Auth failed: {e}")
+                websocket.send(json.dumps({"uid": options.get("uid"), "status": "ERROR", "message": "Invalid authentication token"}))
+                websocket.close()
+                return False
 
             self.use_vad = options.get('use_vad', self.use_vad)
             if self.client_manager.is_server_full(websocket, options):
