@@ -17,7 +17,7 @@ Return ONLY valid JSON. No explanation. No markdown."""
 
 
 def build_prompt(
-    context_text: str, memory_text: str, start_time: float, end_time: float
+    context_text: str, memory_text: str, start_ts: float, end_ts: float
 ) -> str:
     return f"""
 EXISTING MEMORY (already captured — do not repeat):
@@ -38,8 +38,8 @@ Return a JSON object with this exact shape:
   "assigner": null,
   "commitment": null,
   "implication": null,
-  "start_time": {start_time},
-  "end_time": {end_time}
+  "start_ts": {start_ts},
+  "end_ts": {end_ts}
 }}
 
 ---
@@ -140,10 +140,10 @@ def call_llm_async(
                 "\n".join(f"- {m}" for m in (existing_memory or [])) or "None yet."
             )
 
-            start_time = context[0].get("start_ts", 0)
-            end_time = context[-1].get("end_ts", 0)
+            start_ts = context[0].get("start_ts", 0)
+            end_ts = context[-1].get("end_ts", 0)
 
-            prompt = build_prompt(context_text, memory_text, start_time, end_time)
+            prompt = build_prompt(context_text, memory_text, start_ts, end_ts)
 
             payload = {
                 "model": model,

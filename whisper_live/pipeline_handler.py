@@ -26,8 +26,6 @@ def on_statement_finalized(segment, meeting_id):
     if not text:
         return
 
-    print(segment)
-
     # normalize timestamps
     segment["start_ts"] = float(segment.get("start", 0))
     segment["end_ts"] = float(segment.get("end", 0))
