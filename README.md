@@ -1,268 +1,434 @@
-# WhisperLive
+# WhisperLive + Synapse Fork
 
-<h2 align="center">
-  <a href="https://www.youtube.com/watch?v=0PHWCApIcCI"><img
-src="https://img.youtube.com/vi/0PHWCApIcCI/0.jpg" style="background-color:rgba(0,0,0,0);" height=300 alt="WhisperLive"></a>
-  <a href="https://www.youtube.com/watch?v=0f5oiG4oPWQ"><img
-  src="https://img.youtube.com/vi/0f5oiG4oPWQ/0.jpg" style="background-color:rgba(0,0,0,0);" height=300 alt="WhisperLive"></a>
-  <br><br>A nearly-live implementation of OpenAI's Whisper.
-<br><br>
-</h2>
+A realtime meeting intelligence system built on top of [WhisperLive](https://github.com/collabora/WhisperLive?utm_source=chatgpt.com).
 
-This project is a real-time transcription application that uses the OpenAI Whisper model
-to convert speech input into text output. It can be used to transcribe both live audio
-input from microphone and pre-recorded audio files.
+This fork transforms WhisperLive from a realtime transcription server into a live organizational memory system for meetings.
 
-- [Installation](#installation)
-- [Getting Started](#getting-started)
-- [Running the Server](#running-the-server)
-- [Running the Client](#running-the-client)
-- [Browser Extensions](#browser-extensions)
-- [Whisper Live Server in Docker](#whisper-live-server-in-docker)
-- [Future Work](#future-work)
-- [Blog Posts](#blog-posts)
-- [Contact](#contact)
-- [Citations](#citations)
+Instead of only generating transcripts, the system continuously maintains structured meeting state in realtime:
 
-## Installation
-- Install PortAudio
-```bash
- bash scripts/setup.sh
-```
+* decisions
+* action items
+* commitments
+* risks
+* questions
+* follow-ups
+* evolving conversational context
 
-- Install whisper-live from pip
-```bash
- pip install whisper-live
-```
+The goal is not just speech-to-text.
 
+The goal is preserving organizational understanding while conversations are happening.
 
-- Install 3.12 venv on Fedora
+---
 
-```bash
-sudo dnf install -y python3.12 python3.12-pip
-python3.12 -m venv whisper_env
-source whisper_env/bin/activate
-```
+# What We Added
 
+## Realtime Structured Meeting Intelligence
 
-### OpenAI REST interface
+The system continuously analyzes finalized transcript segments and converts them into structured insights.
 
-#### Server
+Supported insight types:
 
-```bash
-python3 run_server.py --port 9090 --backend faster_whisper --max_clients 4 --max_connection_time 600 --enable_rest --cors-origins="http://localhost:8080,http://127.0.0.1:8080"
-```
-
-#### Client
-
-```bash
-python3 client_openai.py $AUDIO_FILE
-```
-
-
-
-### Setting up NVIDIA/TensorRT-LLM for TensorRT backend
-- Please follow [TensorRT_whisper readme](https://github.com/collabora/WhisperLive/blob/main/TensorRT_whisper.md) for setup of [NVIDIA/TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM) and for building Whisper-TensorRT engine.
-
-## Getting Started
-The server supports 3 backends `faster_whisper`, `tensorrt` and `openvino`. If running `tensorrt` backend follow [TensorRT_whisper readme](https://github.com/collabora/WhisperLive/blob/main/TensorRT_whisper.md)
-
-### Running the Server
-- [Faster Whisper](https://github.com/SYSTRAN/faster-whisper) backend
-```bash
-python3 run_server.py --port 9090 \
-                      --backend faster_whisper \
-                      --max_clients 4 \
-                      --max_connection_time 600
-  
-# running with custom model and cache_dir to save auto-converted ctranslate2 models
-python3 run_server.py --port 9090 \
-                      --backend faster_whisper \
-                      --max_clients 4 \
-                      --max_connection_time 600 \
-                      -fw "/path/to/custom/faster/whisper/model" \
-                      -c ~/.cache/whisper-live/
-```
-
-- TensorRT backend. Currently, we recommend to only use the docker setup for TensorRT. Follow [TensorRT_whisper readme](https://github.com/collabora/WhisperLive/blob/main/TensorRT_whisper.md) which works as expected. Make sure to build your TensorRT Engines before running the server with TensorRT backend.
-```bash
-# Run English only model
-python3 run_server.py -p 9090 \
-                      -b tensorrt \
-                      -trt /home/TensorRT-LLM/examples/whisper/whisper_small_en \
-                      --max_clients 4 \
-                      --max_connection_time 600
-
-# Run Multilingual model
-python3 run_server.py -p 9090 \
-                      -b tensorrt \
-                      -trt /home/TensorRT-LLM/examples/whisper/whisper_small \
-                      -m \
-                      --max_clients 4 \
-                      --max_connection_time 600
-```
-- Use `--max_clients` option to restrict the number of clients the server should allow. Defaults to 4.
-- Use `--max_connection_time` options to limit connection time for a client in seconds. Defaults to 600.
-- WhisperLive now supports the [OpenVINO](https://github.com/openvinotoolkit/openvino) backend for efficient inference on Intel CPUs, iGPU and dGPUs. Currently, we tested the models uploaded to [huggingface by OpenVINO](https://huggingface.co/OpenVINO?search_models=whisper).
-  - > **Docker Recommended:** Running WhisperLive with OpenVINO inside Docker automatically enables GPU support (iGPU/dGPU) without requiring additional host setup.
-  - > **Native (non-Docker) Use:** If you prefer running outside Docker, ensure the Intel drivers and OpenVINO runtime are installed and properly configured on your system. Refer to the documentation for [installing OpenVINO](https://docs.openvino.ai/2025/get-started/install-openvino.html?PACKAGE=OPENVINO_BASE&VERSION=v_2025_0_0&OP_SYSTEM=LINUX&DISTRIBUTION=PIP#).
-
-```
-python3 run_server.py -p 9090 -b openvino
-```
-
-
-#### Controlling OpenMP Threads
-To control the number of threads used by OpenMP, you can set the `OMP_NUM_THREADS` environment variable. This is useful for managing CPU resources and ensuring consistent performance. If not specified, `OMP_NUM_THREADS` is set to `1` by default. You can change this by using the `--omp_num_threads` argument:
-```bash
-python3 run_server.py --port 9090 \
-                      --backend faster_whisper \
-                      --omp_num_threads 4
-```
-
-#### Single model mode
-By default, when running the server without specifying a model, the server will instantiate a new whisper model for every client connection. This has the advantage, that the server can use different model sizes, based on the client's requested model size. On the other hand, it also means you have to wait for the model to be loaded upon client connection and you will have increased (V)RAM usage.
-
-When serving a custom TensorRT model using the `-trt` or a custom faster_whisper model using the `-fw` option, the server will instead only instantiate the custom model once and then reuse it for all client connections.
-
-If you don't want this, set `--no_single_model`.
-
-
-### Running the Client
-
-Use the below command to run the client:
-```bash
-python3 run_client.py --files <audio-file-name>
-```
-This will connect to the localhost server running on port 9090 by default. Use flags `--server` and `--port` to use different configurations. The above command will transcribe audio file provided with `--files` flag.
-
-
-Here are the details of client instance implemented in `run_client.py` script:
-  - `lang`: Language of the input audio, applicable only if using a multilingual model.
-  - `translate`: If set to `True` then translate from any language to `en`.
-  - `model`: Whisper model size.
-  - `use_vad`: Whether to use `Voice Activity Detection` on the server.
-  - `save_output_recording`: Set to True to save the microphone input as a `.wav` file during live transcription. This option is helpful for recording sessions for later playback or analysis. Defaults to `False`. 
-  - `output_recording_filename`: Specifies the `.wav` file path where the microphone input will be saved if `save_output_recording` is set to `True`.
-  - `mute_audio_playback`: Whether to mute audio playback when transcribing an audio file. Defaults to False.
-  - `enable_translation`: Start translation thread on the server (from any to any).
-  - `target_language`: Server translation thread's target translation language.
-
-```python
-from whisper_live.client import TranscriptionClient
-client = TranscriptionClient(
-  "localhost",
-  9090,
-  lang="en",
-  translate=False,
-  model="small",                                      # also support hf_model => `Systran/faster-whisper-small`
-  use_vad=False,
-  save_output_recording=True,                         # Only used for microphone input, False by Default
-  output_recording_filename="./output_recording.wav", # Only used for microphone input
-  mute_audio_playback=False,                          # Only used for file input, False by Default
-  enable_translation=True,
-  target_language="hi",
-)
-```
-It connects to the server running on localhost at port 9090. Using a multilingual model, language for the transcription will be automatically detected. You can also use the language option to specify the target language for the transcription, in this case, English ("en"). The translate option should be set to `True` if we want to translate from the source language to English and `False` if we want to transcribe in the source language.
-
-- Transcribe an audio file:
-```python
-client("tests/jfk.wav")
-```
-
-- To transcribe from microphone:
-```python
-client()
-```
-
-- To transcribe from a RTSP stream:
-```python
-client(rtsp_url="rtsp://admin:admin@192.168.0.1/rtsp")
-```
-
-- To transcribe from a HLS stream:
-```python
-client(hls_url="http://as-hls-ww-live.akamaized.net/pool_904/live/ww/bbc_1xtra/bbc_1xtra.isml/bbc_1xtra-audio%3d96000.norewind.m3u8")
-```
-
-## Browser Extensions
-- Run the server with your desired backend as shown [here](https://github.com/collabora/WhisperLive?tab=readme-ov-file#running-the-server).
-- Transcribe audio directly from your browser using our Chrome or Firefox extensions. Refer to [Audio-Transcription-Chrome](https://github.com/collabora/whisper-live/tree/main/Audio-Transcription-Chrome#readme) and https://github.com/collabora/WhisperLive/blob/main/TensorRT_whisper.md
-
-## iOS Client
-
-Use WhisperLive on iOS with our native iOS client.  
-Refer to [`ios-client`](https://github.com/collabora/WhisperLive/tree/main/Audio-Transcription-iOS) and [`ios-client/README.md`](https://github.com/collabora/WhisperLive/blob/main/Audio-Transcription-iOS/README.md) for setup and usage instructions.
-
-
-## Whisper Live Server in Docker
-- GPU
-  - Faster-Whisper
-  ```bash
-  docker run -it --gpus all -p 9090:9090 ghcr.io/collabora/whisperlive-gpu:latest
-  ```
-
-  - TensorRT. Refer to [TensorRT_whisper readme](https://github.com/collabora/WhisperLive/blob/main/TensorRT_whisper.md) for setup and more tensorrt backend configurations.
-  ```bash
-  docker build . -f docker/Dockerfile.tensorrt -t whisperlive-tensorrt
-  docker run -p 9090:9090 --runtime=nvidia --entrypoint /bin/bash -it whisperlive-tensorrt
-
-  # Build small.en engine
-  bash build_whisper_tensorrt.sh /app/TensorRT-LLM-examples small.en        # float16
-  bash build_whisper_tensorrt.sh /app/TensorRT-LLM-examples small.en int8   # int8 weight only quantization
-  bash build_whisper_tensorrt.sh /app/TensorRT-LLM-examples small.en int4   # int4 weight only quantization
-
-  # Run server with small.en
-  python3 run_server.py --port 9090 \
-                        --backend tensorrt \
-                        --trt_model_path "/app/TensorRT-LLM-examples/whisper/whisper_small_en_float16"
-                        --trt_model_path "/app/TensorRT-LLM-examples/whisper/whisper_small_en_int8"
-                        --trt_model_path "/app/TensorRT-LLM-examples/whisper/whisper_small_en_int4"
-  ```
-
-  - OpenVINO
-  ```
-  docker run -it --device=/dev/dri -p 9090:9090 ghcr.io/collabora/whisperlive-openvino
-  ```
-
-- CPU
-  - Faster-whisper
-  ```bash
-  docker run -it -p 9090:9090 ghcr.io/collabora/whisperlive-cpu:latest
-  ```
-
-## Future Work
-- [x] Add translation to other languages on top of transcription.
-
-## Blog Posts
-- [Transforming speech technology with WhisperLive](https://www.collabora.com/news-and-blog/blog/2024/05/28/transforming-speech-technology-with-whisperlive/)
-- [WhisperFusion: Ultra-low latency conversations with an AI chatbot](https://www.collabora.com/news-and-blog/news-and-events/whisperfusion-ultra-low-latency-conversations-with-an-ai-chatbot.html) powered by WhisperLive
-- [Breaking language barriers 2.0: Moving closer towards fully reliable, production-ready Hindi ASR](https://www.collabora.com/news-and-blog/news-and-events/breaking-language-barriers-20-moving-closer-production-ready-hindi-asr.html) which is used in WhisperLive for hindi.
-
-## Contact
-
-We are available to help you with both Open Source and proprietary AI projects. You can reach us via the Collabora website or [vineet.suryan@collabora.com](mailto:vineet.suryan@collabora.com) and [marcus.edel@collabora.com](mailto:marcus.edel@collabora.com).
-
-
-## Citations
-```bibtex
-@article{Whisper
-  title = {Robust Speech Recognition via Large-Scale Weak Supervision},
-  url = {https://arxiv.org/abs/2212.04356},
-  author = {Radford, Alec and Kim, Jong Wook and Xu, Tao and Brockman, Greg and McLeavey, Christine and Sutskever, Ilya},
-  publisher = {arXiv},
-  year = {2022},
+```json
+{
+  "type": "update" | "flag"
 }
 ```
 
-```bibtex
-@misc{Silero VAD,
-  author = {Silero Team},
-  title = {Silero VAD: pre-trained enterprise-grade Voice Activity Detector (VAD), Number Detector and Language Classifier},
-  year = {2021},
-  publisher = {GitHub},
-  journal = {GitHub repository},
-  howpublished = {\url{https://github.com/snakers4/silero-vad}},
-  email = {hello@silero.ai}
+### `update`
+
+General conversational understanding:
+
+* questions
+* concerns
+* decisions
+* opinions
+* evolving context
+* important discussion changes
+
+### `flag`
+
+Commitments and accountability signals:
+
+* assigned responsibilities
+* ownership
+* deadlines
+* agreements
+* obligations
+* delegated tasks
+
+---
+
+# Persistent Meeting Memory
+
+We added a live memory state management system that continuously tracks meeting state.
+
+The memory layer maintains:
+
+* rolling transcript context
+* recent insights
+* structured meeting state
+* duplicate prevention
+* incremental context updates
+
+Unlike traditional meeting tools that repeatedly summarize the same content, this system maintains evolving memory throughout the meeting.
+
+Core implementation:
+
+```python
+class MemoryStore:
+```
+
+Features:
+
+* rolling context windows
+* meeting session isolation
+* transcript state tracking
+* insight memory
+* realtime context accumulation
+* cleanup/finalization handling
+
+---
+
+# Buffered LLM Processing
+
+Original WhisperLive processed transcription only.
+
+We added buffered AI processing logic to avoid excessive LLM calls.
+
+The system now:
+
+* accumulates transcript segments
+* waits until enough conversational context exists
+* triggers intelligent analysis in batches
+* prevents noisy per-segment inference
+
+Current batching strategy:
+
+```python
+MIN_CHARS = 300
+MAX_WAIT = 30
+```
+
+LLM calls trigger when:
+
+* enough conversational context accumulates
+  OR
+* timeout threshold is reached
+
+This significantly improves:
+
+* coherence
+* context awareness
+* inference quality
+* GPU efficiency
+
+---
+
+# Context-Aware LLM Pipeline
+
+We implemented a structured LLM pipeline using locally served Llama models through [vLLM](https://github.com/vllm-project/vllm?utm_source=chatgpt.com).
+
+The pipeline:
+
+* receives rolling transcript context
+* receives existing meeting memory
+* avoids duplicate insights
+* extracts structured realtime intelligence
+* returns strict JSON outputs
+
+Structured outputs include:
+
+```json
+{
+  "type": "flag",
+  "summary": "...",
+  "assignee": "...",
+  "assigner": "...",
+  "commitment": "...",
+  "implication": "..."
 }
+```
+
+---
+
+# Supabase Persistence Layer
+
+We added persistent storage using [Supabase](https://supabase.com?utm_source=chatgpt.com).
+
+Stored data includes:
+
+* finalized transcripts
+* structured insights
+* meeting history
+* commitments
+* meeting memory state
+
+Tables currently used:
+
+* `transcripts`
+* `insights`
+
+---
+
+# Meeting Finalization System
+
+Meetings now properly finalize on:
+
+* disconnect
+* shutdown
+* termination signals
+
+Finalization includes:
+
+* transcript persistence
+* insight persistence
+* memory cleanup
+* session cleanup
+
+Graceful shutdown support added through:
+
+* `SIGINT`
+* `SIGTERM`
+
+---
+
+# Authentication Layer
+
+We added authenticated meeting access using Supabase Auth.
+
+Features:
+
+* token validation
+* authenticated websocket connections
+* protected REST endpoints
+* per-user meeting ownership
+
+---
+
+# OpenAI-Compatible REST API
+
+The fork now exposes an OpenAI-style transcription API.
+
+Endpoint:
+
+```bash
+POST /v1/audio/transcriptions
+```
+
+Supports:
+
+* JSON
+* verbose_json
+* text
+* SRT
+* VTT
+
+Compatible with:
+
+* OpenAI-style clients
+* external applications
+* browser integrations
+
+---
+
+# Realtime Organizational Memory Architecture
+
+Current architecture:
+
+```text
+Browser Audio
+    ↓
+Whisper Transcription
+    ↓
+Buffered Context Accumulation
+    ↓
+Context-Aware LLM Processing
+    ↓
+Structured Insight Extraction
+    ↓
+Persistent Meeting Memory
+    ↓
+Realtime Organizational State
+```
+
+---
+
+# Browser-Based Audio Capture
+
+The frontend supports:
+
+* microphone capture
+* browser tab audio capture
+
+Important behavior:
+
+* tab sharing remains fixed
+* users can freely navigate other tabs
+* no switching occurs during capture
+
+This makes it usable during:
+
+* Google Meet
+* Zoom
+* browser-based meetings
+* presentations
+
+Users currently choose:
+
+* mic OR tab audio
+
+(not both simultaneously yet)
+
+---
+
+# Current Capabilities
+
+## Implemented
+
+* realtime transcription
+* rolling conversational memory
+* structured insight extraction
+* commitment detection
+* action item detection
+* duplicate prevention
+* buffered LLM inference
+* Supabase persistence
+* OpenAI-compatible API
+* authenticated sessions
+* meeting finalization
+* realtime meeting state management
+
+---
+
+# Planned Features
+
+## Diarization
+
+Identify who said what during meetings.
+
+## Meeting Replays
+
+Replay meetings as if they were happening live.
+
+## Autonomous Follow-Ups
+
+AI agents remind users about commitments and deadlines.
+
+## Collaboration Integrations
+
+Integrations with:
+
+* Slack
+* ClickUp
+* Linear
+* Notion
+* Jira
+
+Example:
+Tasks mentioned during meetings can automatically become assigned work items.
+
+## Persistent Organizational Memory
+
+Long-term searchable team intelligence across meetings.
+
+---
+
+# Infrastructure
+
+## GPU Deployment
+
+This project was deployed using AMD GPU infrastructure.
+
+We used the pre-configured ROCm + vLLM image provided through the AMD cloud environment to serve local Llama models efficiently.
+
+---
+
+# Setup
+
+## Clone Repository
+
+```bash
+git clone https://github.com/al-ameen36/WhisperLive
+cd WhisperLive
+git checkout dev
+```
+
+---
+
+# Install Dependencies
+
+```bash
+pip install "fastapi[standard]" pyngrok openai-whisper onnxruntime-rocm supabase
+```
+
+---
+
+# Environment Variables
+
+Export the required environment variables.
+
+Check:
+
+```bash
+.env.example
+```
+
+Required variables include:
+
+* `SUPABASE_URL`
+* `SUPABASE_KEY`
+* `SUPABASE_SERVICE_ROLE_KEY`
+* `NGROK_AUTHTOKEN`
+* `NGROK_DOMAIN`
+
+---
+
+# Serve Local Llama Model
+
+Using vLLM:
+
+```bash
+HIP_VISIBLE_DEVICES=0 vllm serve meta-llama/Llama-3.3-70B-Instruct \
+    --gpu-memory-utilization 0.8 \
+    --swap-space 16 \
+    --dtype float16 \
+    --tensor-parallel-size 1 \
+    --host 0.0.0.0 \
+    --port 3000 \
+    --max-num-seqs 128 \
+    --max-num-batched-tokens 8192 \
+    --max-model-len 8192 \
+    --distributed-executor-backend "mp"
+```
+
+---
+
+# Start Server
+
+In a separate terminal:
+
+```bash
+python run_server.py --enable_llm
+```
+
+---
+
+# Tech Stack
+
+Core technologies used:
+
+* [WhisperLive](https://github.com/collabora/WhisperLive?utm_source=chatgpt.com)
+* [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper?utm_source=chatgpt.com)
+* [vLLM](https://github.com/vllm-project/vllm?utm_source=chatgpt.com)
+* [Meta Llama 3](https://www.llama.com?utm_source=chatgpt.com)
+* [Supabase](https://supabase.com?utm_source=chatgpt.com)
+* [FastAPI](https://fastapi.tiangolo.com?utm_source=chatgpt.com)
+* [Pyngrok](https://pyngrok.readthedocs.io?utm_source=chatgpt.com)
+
+---
+
+# Vision
+
+Meetings are where organizations think.
+
+This project turns conversations into persistent organizational memory in realtime.
