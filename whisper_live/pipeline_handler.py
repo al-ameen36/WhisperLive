@@ -9,6 +9,8 @@ from whisper_live.db.repository import (
     save_transcript,
     save_insight,
 )
+from whisper_live.cli_arguments import args
+
 
 MIN_CHARS = 300
 MAX_WAIT = 30
@@ -81,9 +83,9 @@ def on_statement_finalized(segment, meeting_id):
 
     # llm call
     call_llm_async(
-        host="localhost",
-        port=3000,
-        model="meta-llama/Meta-Llama-3-8B-Instruct",
+        host=args.llm_host,
+        port=args.llm_port,
+        model=args.llm_model,
         context=new_context,
         existing_memory=memory.get_recent_insights(meeting_id),
         callback=handle_insight,

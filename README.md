@@ -350,7 +350,6 @@ We used the pre-configured ROCm + vLLM image provided through the AMD cloud envi
 ```bash
 git clone https://github.com/al-ameen36/WhisperLive
 cd WhisperLive
-git checkout dev
 ```
 
 ---
