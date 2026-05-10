@@ -408,7 +408,55 @@ HIP_VISIBLE_DEVICES=0 vllm serve meta-llama/Llama-3.3-70B-Instruct \
 In a separate terminal:
 
 ```bash
-python run_server.py --enable_llm
+python run_server.py --enable_llm --llm_model meta-llama/Llama-3.3-70B-Instruct
+```
+
+---
+
+# Default Runtime Arguments
+
+```bash
+# Network
+--port 9090
+--cors-origins None
+
+# Backend
+--backend whisper
+--faster_whisper_custom_model_path None
+--trt_model_path None
+--trt_multilingual false
+--trt_py_session false
+--cache_path ~/.cache/whisper-live/
+
+# Client limits
+--max_clients 4
+--max_connection_time 86400
+--no_single_model false
+
+# Voice Activity Detection
+--no_vad false
+
+# Audio input
+--raw_pcm_input false
+
+# Batch inference
+--batch_inference false
+--batch_max_size 8
+--batch_window_ms 50
+
+# REST API
+--enable_rest false
+--rest_port 8000
+
+# Performance
+--omp_num_threads 1
+
+# LLM
+--enable_llm false
+--llm_host localhost
+--llm_port 3000
+--llm_buffer_size 3
+--llm_model meta-llama/Meta-Llama-3-8B-Instruct
 ```
 
 ---
